@@ -1,0 +1,10 @@
+# materiały źródłowe (PDF, docx, książki) – nie publikujemy
+raw_materials/
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+.DS_Store
+Thumbs.db
