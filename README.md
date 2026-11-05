@@ -8,7 +8,7 @@ Notebooki działają w **Google Colab** bez instalowania czegokolwiek – klikni
 
 | Lab | Temat | Colab |
 |---|---|---|
-| 2 | Przestrzenie stanów: świat odkurzacza, pojemniki z wodą | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BartekDaniluk/Interactive-Kognitywistyka/blob/main/lab02_stany/01_przestrzenie_stanow.ipynb) |
+| 2 | Przestrzenie stanów: świat odkurzacza, pojemniki z wodą | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BartekDaniluk/kognitywistyka_intor_to_AI/blob/main/lab02_stany/01_przestrzenie_stanow.ipynb) |
 
 ## Uruchomienie lokalnie
 
