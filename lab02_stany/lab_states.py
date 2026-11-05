@@ -693,9 +693,11 @@ class WaterJugs(Problem):
 # HTML: definicja formalna i tabela przejsc
 # --------------------------------------------------------------------------
 _CSS = """<style>
-table.ls{border-collapse:collapse;font-size:13px;margin:4px 0}
-table.ls td,table.ls th{border:1px solid #ced4da;padding:3px 8px;vertical-align:top;text-align:left}
-table.ls th{background:#f1f3f5}
+table.ls{border-collapse:collapse;font-size:13px;margin:4px 0;color:#212529;background:#ffffff}
+table.ls td,table.ls th{border:1px solid #ced4da;padding:3px 8px;vertical-align:top;text-align:left;
+  color:#212529;background:#ffffff}
+table.ls th{background:#f1f3f5;color:#212529}
+table.ls code{color:#212529;background:#f1f3f5}
 table.ls tr.ini td{background:#ebfbee}
 table.ls tr.goal td{background:#fff9db}
 table.ls tr.unr td{color:#adb5bd}
