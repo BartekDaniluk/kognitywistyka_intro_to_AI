@@ -153,6 +153,20 @@ def t(key: str, **kw) -> str:
     return s.format(**kw) if kw else s
 
 
+def n_steps(n: int) -> str:
+    """'1 krok', '2 kroki', '5 kroków' (polska odmiana) / '1 step', '2 steps'."""
+    if LANG == "pl":
+        if n == 1:
+            w = "krok"
+        elif n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+            w = "kroki"
+        else:
+            w = "kroków"
+    else:
+        w = "step" if n == 1 else "steps"
+    return f"{n} {w}"
+
+
 # Kolory
 C_INITIAL = "#2f9e44"
 C_GOAL_FILL = "#ffe066"
@@ -690,6 +704,108 @@ class WaterJugs(Problem):
 
 
 # --------------------------------------------------------------------------
+# Winda - przyklad wprowadzajacy
+# --------------------------------------------------------------------------
+class Elevator(Problem):
+    """Stan: (P, D) - pietro P (0 = parter) i drzwi D: 'o' otwarte / 'z' zamkniete.
+    Reguly: 1 jedz w gore, 2 jedz w dol (tylko przy zamknietych drzwiach),
+    3 otworz drzwi, 4 zamknij drzwi."""
+
+    _S = {
+        "pl": {1: "jedź w górę", 2: "jedź w dół", 3: "otwórz drzwi", 4: "zamknij drzwi",
+               "states": "(P, D), gdzie P – piętro (0 = parter, …, {top}), D – drzwi: o = otwarte, z = zamknięte",
+               "o": "o", "z": "z"},
+        "en": {1: "go up", 2: "go down", 3: "open the door", 4: "close the door",
+               "states": "(F, D), where F – floor (0 = ground, …, {top}), D – door: o = open, z = closed",
+               "o": "o", "z": "z"},
+    }
+    COLORS = {1: "#1c7ed6", 2: "#1c7ed6", 3: "#2f9e44", 4: "#2f9e44"}
+
+    def __init__(self, floors=3, initial=(0, "o"), goal=(2, "o")):
+        self.floors = floors
+        self.goal = goal
+        super().__init__(initial)
+        self.node_w, self.node_h = 0.95, 0.5
+
+    def _s(self, k):
+        return self._S[LANG][k]
+
+    def all_states(self):
+        return [(p, d) for p in range(self.floors) for d in ("z", "o")]
+
+    def action_list(self):
+        return (1, 2, 3, 4)
+
+    def applicable(self, s, a):
+        p, d = s
+        return {1: d == "z" and p < self.floors - 1, 2: d == "z" and p > 0,
+                3: d == "z", 4: d == "o"}[a]
+
+    def result(self, s, a):
+        p, d = s
+        return {1: (p + 1, "z"), 2: (p - 1, "z"), 3: (p, "o"), 4: (p, "z")}[a]
+
+    def is_goal(self, s):
+        gp, gd = self.goal
+        return (gp is None or s[0] == gp) and (gd is None or s[1] == gd)
+
+    def sort_key(self, s):
+        return (s[0], s[1] == "o")
+
+    def state_label(self, s):
+        return f"({s[0]}, {self._s(s[1])})"
+
+    def action_name(self, a):
+        return f"{a}. {self._s(a)}"
+
+    def action_short(self, a):
+        return str(a)
+
+    def action_color(self, a):
+        return self.COLORS[a]
+
+    def legend_actions(self):
+        return [(f"1, 2 = {self._s(1)} / {self._s(2)}", self.COLORS[1]),
+                (f"3, 4 = {self._s(3)} / {self._s(4)}", self.COLORS[3])]
+
+    def layout(self, states):
+        return {(p, d): (p * 2.4, 1.8 if d == "o" else 0.0) for p, d in states}
+
+    def draw_state(self, ax, s):
+        p, d = s
+        n = self.floors
+        ax.add_patch(Rectangle((0, 0), 1.2, n, fc="#f8f9fa", ec="#495057", lw=2))
+        for f in range(n):
+            ax.plot([0, 1.2], [f, f], color="#adb5bd", lw=1)
+            ax.text(-0.15, f + 0.5, str(f), ha="right", va="center", fontsize=12, weight="bold")
+        ax.add_patch(Rectangle((0.15, p + 0.08), 0.9, 0.84, fc="#ced4da", ec="#343a40", lw=2))
+        gap = 0.3 if d == "o" else 0.0
+        for x0 in (0.15, 0.6 + gap / 2):
+            ax.add_patch(Rectangle((x0, p + 0.08), 0.45 - gap / 2, 0.84, fc="#868e96", ec="#343a40", lw=1))
+        ax.set_xlim(-0.6, 1.5)
+        ax.set_ylim(-0.1, n + 0.1)
+        ax.set_aspect("equal")
+        ax.axis("off")
+
+    def definition_rows(self):
+        top = self.floors - 1
+        cond = {1: f"D = z; P &lt; {top}", 2: "D = z; P &gt; 0", 3: "D = z", 4: "D = o"}
+        eff = {1: "(P+1, z)", 2: "(P−1, z)", 3: "(P, o)", 4: "(P, z)"}
+        rows = "".join(f"<tr><td style='text-align:center'><b>{a}</b></td><td>(P, D | {cond[a]})</td>"
+                       f"<td>→ {eff[a]}</td><td>{self._s(a)}</td></tr>" for a in self.action_list())
+        table = (f"<table class='ls'><tr><th>{t('jug_rule')}</th><th>{t('jug_cond')}</th>"
+                 f"<th>{t('jug_effect')}</th><th>{t('jug_desc')}</th></tr>{rows}</table>")
+        gp, gd = self.goal
+        return [
+            (t("states"), self._s("states").format(top=top)),
+            (t("initial"), self.state_label(self.initial)),
+            (t("goal"), f"P = {'*' if gp is None else gp}, D = {'*' if gd is None else self._s(gd)}"),
+            (t("actions") + " / " + t("transition"), table),
+            (t("cost"), t("jug_cost_unit_desc")),
+        ]
+
+
+# --------------------------------------------------------------------------
 # HTML: definicja formalna i tabela przejsc
 # --------------------------------------------------------------------------
 _CSS = """<style>
@@ -720,7 +836,7 @@ def definition_html(space: StateSpace, solution=None) -> str:
                          [f"<i>{html.escape(p.action_short(a))}</i> → {html.escape(p.state_label(s2))}"
                           for _, a, s2 in steps])
         sol = (f"<b>{html.escape(p.solution_text(steps)) or '∅'}</b> "
-               f"({len(steps)} {t('steps')}, {t('total_cost')} = {cost})<br>"
+               f"({n_steps(len(steps))}, {t('total_cost')} = {cost})<br>"
                f"<span style='font-size:90%'>{seq}</span>")
     rows.append((t("solution"), sol))
     body = "".join(f"<tr><th style='width:170px'>{k}</th><td>{v}</td></tr>" for k, v in rows)
@@ -894,7 +1010,7 @@ class _App:
                              if p.is_goal(s) else "")
         seq = " – ".join(p.action_short(a) for _, a, _ in self.history) or t("path_empty")
         self.path_html.value = (f"<b>{t('path')}:</b> {html.escape(seq)}<br>"
-                                f"{len(self.history)} {t('steps')}, {t('total_cost')} = <b>{cost}</b>")
+                                f"{n_steps(len(self.history))}, {t('total_cost')} = <b>{cost}</b>")
         self._render_graph()
 
     def _render_graph(self):
