@@ -3,7 +3,8 @@ lab_traversal_quiz.py - cwiczenie "BFS i DFS na kartce", ale w przegladarce.
 
 Student dostaje losowy graf (5-10 wezlow, numery 0-9), losowy wezel START i CEL, i:
   1. klikajac wezly zapisuje kolejnosc odwiedzania BFS,
-  2. tak samo dla DFS,
+  2. tak samo dla DFS - jako preorder (kolejnosc wejscia) ALBO postorder (kolejnosc wyjscia);
+     odpowiedz zaczynajaca sie od START jest sprawdzana jako preorder, kazda inna jako postorder,
   3. klikajac wezly zapisuje najkrotsza sciezke START -> CEL,
 a potem klika "Sprawdz" - odpowiedzi robia sie zielone 😀 albo czerwone 😢.
 
@@ -19,6 +20,7 @@ graf (nie zatrzymujemy sie na celu).
 Sprawdzanie i galeria korzystaja z tej samej funkcji "dozwolone nastepne wezly":
   BFS - nieodwiedzone wezly odkryte najwczesniej (rodzic najwczesniej na liscie),
   DFS - nieodwiedzeni sasiedzi wezla na szczycie stosu (po cofnieciu ze slepych zaulkow).
+Postorder sprawdza postSearch: przeszukiwanie z nawrotami po wyborach DFS (z pamiecia martwych stanow).
 
 Cale cwiczenie dziala w JavaScripcie w komorce wyjsciowej (Colab, JupyterLab, VS Code),
 bez ipywidgets.
@@ -107,6 +109,16 @@ var TQ = (function () {
     })(s);
     return order;
   }
+  // DFS rekurencyjny, postorder: wezel zapisujemy, gdy WYCHODZIMY z niego (wszyscy sasiedzi juz odwiedzeni)
+  function dfsPostOrder(adj, s) {
+    var seen = {}, order = [];
+    (function go(u) {
+      seen[u] = true;
+      adj[u].forEach(function (v) { if (!seen[v]) go(v); });
+      order.push(u);
+    })(s);
+    return order;
+  }
   function shortestPath(adj, s, t) {
     var par = {}, q = [s];
     par[s] = -1;
@@ -136,10 +148,11 @@ var TQ = (function () {
   function walker(n, kind) {
     var vis = [], ppos = [];
     for (var i = 0; i < n; i++) { vis.push(false); ppos.push(-1); }
-    return { kind: kind, order: [], vis: vis, ppos: ppos, stack: [] };
+    return { kind: kind, order: [], vis: vis, ppos: ppos, stack: [], post: [] };
   }
   function clone(w) {
-    return { kind: w.kind, order: w.order.slice(), vis: w.vis.slice(), ppos: w.ppos.slice(), stack: w.stack.slice() };
+    return { kind: w.kind, order: w.order.slice(), vis: w.vis.slice(), ppos: w.ppos.slice(), stack: w.stack.slice(),
+             post: w.post.slice() };
   }
   function visit(w, adj, v) {
     var p = w.order.length;
@@ -162,7 +175,7 @@ var TQ = (function () {
       var top = w.stack[w.stack.length - 1];
       var c2 = adj[top].filter(function (x) { return !w.vis[x]; });
       if (c2.length) return c2;
-      w.stack.pop();
+      w.post.push(w.stack.pop());   // wychodzimy z wezla -> postorder
     }
     return [];
   }
@@ -189,18 +202,62 @@ var TQ = (function () {
     }
     return res;
   }
-  // Wszystkie poprawne kolejnosci (leksykograficznie: #1 = kolejnosc egzaminacyjna)
+  // Postorder: czy "given" (albo jego poczatek) to postorder jakiegos przebiegu DFS?
+  // Przeszukiwanie z nawrotami po wyborach DFS; ucinamy galaz, gdy zakonczony wezel nie zgadza
+  // sie z odpowiedzia. asc=true -> tylko przebieg "rosnaco" (egzamin).
+  // best = dlugosc najdluzszego pasujacego poczatku odpowiedzi.
+  function postSearch(adj, s, given, asc) {
+    var n = adj.length, best = 0, dead = {};
+    if (!given.length) return { best: 0, ok: true };
+    function rec(vis, stack, k) {
+      stack = stack.slice();
+      while (stack.length) {
+        var top = stack[stack.length - 1];
+        if (adj[top].some(function (x) { return !vis[x]; })) break;
+        stack.pop();
+        if (given[k] !== top) return false;
+        k++; if (k > best) best = k;
+        if (k === given.length) return true;
+      }
+      if (!stack.length) return false;
+      var key = vis.join("") + "|" + stack.join(",");
+      if (dead[key]) return false;
+      var c = adj[stack[stack.length - 1]].filter(function (x) { return !vis[x]; });
+      if (asc) c = [Math.min.apply(null, c)];
+      for (var i = 0; i < c.length; i++) {
+        var v2 = vis.slice(); v2[c[i]] = 1;
+        if (rec(v2, stack.concat([c[i]]), k)) return true;
+      }
+      dead[key] = true;
+      return false;
+    }
+    var vis = [];
+    for (var i = 0; i < n; i++) vis.push(0);
+    vis[s] = 1;
+    var ok = rec(vis, [s], 0);
+    return { best: best, ok: ok };
+  }
+  // Wszystkie poprawne kolejnosci (wg preorder leksykograficznie: #1 = kolejnosc egzaminacyjna).
+  // kind: "bfs" | "dfs" (preorder) | "dfspost" (rozne postordery, w kolejnosci pierwszego wystapienia)
   function enumerate(adj, s, kind, storeCap, countCap) {
     storeCap = storeCap || STORE_CAP; countCap = countCap || COUNT_CAP;
-    var list = [], count = 0, w0 = walker(adj.length, kind);
+    var post = kind === "dfspost", seenPost = {}, runs = 0;
+    var list = [], count = 0, w0 = walker(adj.length, post ? "dfs" : kind);
     visit(w0, adj, s);
     (function rec(w) {
-      if (count >= countCap) return;
+      if (runs >= countCap) return;
       var c = candidates(w, adj);
-      if (!c.length) { count++; if (list.length < storeCap) list.push(w.order.slice()); return; }
+      if (!c.length) {
+        runs++;
+        var seq = post ? w.post : w.order;
+        if (post) { var key = seq.join(","); if (seenPost[key]) return; seenPost[key] = true; }
+        count++;
+        if (list.length < storeCap) list.push(seq.slice());
+        return;
+      }
       c.sort(asc).forEach(function (v) { var w2 = clone(w); visit(w2, adj, v); rec(w2); });
     })(w0);
-    return { count: count, capped: count >= countCap, list: list };
+    return { count: count, capped: runs >= countCap, list: list };
   }
 
   function generate(n, density, seed) {
@@ -250,7 +307,7 @@ var TQ = (function () {
     if (!far.length) far = range(n).filter(function (x) { return x !== start; });
     var target = far[Math.floor(r() * far.length)];
     return { n: n, pos: pos, edges: edges, adj: adj, start: start, target: target, seed: seed,
-             dist: dist, bfs: bfsOrder(adj, start), dfs: dfsOrder(adj, start),
+             dist: dist, bfs: bfsOrder(adj, start), dfs: dfsOrder(adj, start), dfspost: dfsPostOrder(adj, start),
              path: shortestPath(adj, start, target), paths: allShortestPaths(adj, start, target, 50) };
   }
 
@@ -262,11 +319,38 @@ var TQ = (function () {
   function fmt(k) { return String(k).replace(/\B(?=(\d{3})+(?!\d))/g, " "); }
 
   var KIND = { bfs: "BFS", dfs: "DFS" };
+  var PRE = "preorder (kolejność wejścia do węzłów)", POST = "postorder (kolejność wyjścia z węzłów)";
+  // DFS: odpowiedz zaczynajaca sie od START sprawdzamy jako preorder, kazda inna - jako postorder
+  function checkPost(g, given, mode) {
+    var res = postSearch(g.adj, g.start, given, false);
+    if (mode === "exam") {
+      var ex = postSearch(g.adj, g.start, given, true);
+      if (!ex.ok && (res.ok || res.best > ex.best))
+        return { ok: false, rule: true, which: "post", msg: "Taki postorder jest możliwy w DFS, ale łamie zasadę „rosnąco”: " +
+                 "pierwsza różnica na pozycji " + (ex.best + 1) + " (węzeł " + given[ex.best] + ") – idąc w głąb, " +
+                 "DFS zawsze wybiera najmniejszego nieodwiedzonego sąsiada." };
+      res = ex;
+    }
+    if (!res.ok) {
+      var v = given[res.best];
+      var why = v === g.start
+        ? "z węzła START wychodzimy na samym końcu – dopiero gdy cały graf jest odwiedzony."
+        : "w tym momencie DFS nie może skończyć węzła " + v + ". W postorder zapisujemy węzeł, gdy z niego " +
+          "<b>wychodzimy</b> (cofamy się) – czyli gdy wszyscy jego sąsiedzi są już odwiedzeni.";
+      return { ok: false, which: "post", msg: "Odpowiedź nie zaczyna się od START, więc sprawdzam ją jako " + POST +
+               ". Pierwszy błąd na pozycji " + (res.best + 1) + " (węzeł " + v + "): " + why };
+    }
+    if (given.length < g.n)
+      return { ok: false, which: "post", msg: "Dotąd dobrze – to początek poprawnego postorder, ale brakuje węzłów: " +
+               given.length + " z " + g.n + "." };
+    return { ok: true, which: "post", msg: "Poprawny " + POST + "!" };
+  }
   function checkTraversal(g, kind, given, mode) {
     if (!given.length) return { ok: false, msg: "Lista jest pusta – kliknij węzły na grafie." };
+    if (kind === "dfs" && given[0] !== g.start && g.n > 1) return checkPost(g, given, mode);
     var a = analyze(g.adj, g.start, kind, given), inv = a.invalid, rb = a.ruleBreak;
     if (mode === "exam" && rb && (!inv || rb.idx < inv.idx))
-      return { ok: false, rule: true, msg: "Taka kolejność jest możliwa w " + KIND[kind] + ", ale łamie zasadę „rosnąco”: na pozycji " +
+      return { ok: false, rule: true, which: "pre", msg: (kind === "dfs" ? "Taki preorder jest możliwy w DFS" : "Taka kolejność jest możliwa w BFS") + ", ale łamie zasadę „rosnąco”: na pozycji " +
                (rb.idx + 1) + " do wyboru były węzły " + rb.cands.join(", ") + " – bierzemy najmniejszy, czyli " + rb.cands[0] + "." };
     if (inv) {
       var why = {
@@ -275,11 +359,12 @@ var TQ = (function () {
         queue: "w kolejce FIFO czekają jeszcze węzły odkryte wcześniej (przez węzeł " + inv.waitingFor + ") – one idą pierwsze.",
         dfs: "DFS jest teraz w węźle " + inv.top + " i musi wejść do jednego z jego nieodwiedzonych sąsiadów (cofamy się dopiero ze ślepego zaułka)."
       }[inv.why];
-      return { ok: false, msg: "Pierwszy błąd na pozycji " + (inv.idx + 1) + " (węzeł " + inv.v + "): " + why };
+      return { ok: false, which: "pre", msg: "Pierwszy błąd na pozycji " + (inv.idx + 1) + " (węzeł " + inv.v + "): " + why };
     }
     if (given.length < g.n)
-      return { ok: false, msg: "Dotąd dobrze, ale brakuje węzłów: odwiedzono " + given.length + " z " + g.n + "." };
-    return { ok: true, msg: "Kolejność poprawna!" };
+      return { ok: false, which: "pre", msg: "Dotąd dobrze" + (kind === "dfs" ? " – to początek poprawnego preorder" : "") +
+               ", ale brakuje węzłów: odwiedzono " + given.length + " z " + g.n + "." };
+    return { ok: true, which: "pre", msg: kind === "dfs" ? "Poprawny " + PRE + "!" : "Kolejność poprawna!" };
   }
   // zgodnosc wsteczna: porownanie z jedna oczekiwana kolejnoscia
   function checkOrder(expected, given) {
@@ -307,7 +392,7 @@ var TQ = (function () {
 
   return { W: W, H: H, R: R, rng: rng, generate: generate, bfsOrder: bfsOrder, dfsOrder: dfsOrder,
            bfsDist: bfsDist, shortestPath: shortestPath, allShortestPaths: allShortestPaths,
-           analyze: analyze, enumerate: enumerate, checkTraversal: checkTraversal, checkOrder: checkOrder,
+           dfsPostOrder: dfsPostOrder, postSearch: postSearch, analyze: analyze, enumerate: enumerate, checkTraversal: checkTraversal, checkOrder: checkOrder,
            checkPath: checkPath, nSteps: nSteps, plural: plural, fmt: fmt };
 })();
 if (typeof module === "object" && module && module.exports && typeof window === "undefined") module.exports = TQ;
@@ -322,7 +407,7 @@ _UI_JS = r"""
   var CFG = __CFG__;
   var TASKS = [
     { id: "bfs", color: "#1971c2", tint: "#d0ebff", title: "1. Kolejność odwiedzania – BFS (wszerz)" },
-    { id: "dfs", color: "#e8590c", tint: "#ffe8cc", title: "2. Kolejność odwiedzania – DFS (w głąb)" },
+    { id: "dfs", color: "#e8590c", tint: "#ffe8cc", title: "2. DFS (w głąb) – preorder albo postorder" },
     { id: "path", color: "#9c36b5", tint: "#f3d9fa", title: "3. Najkrótsza ścieżka START → CEL" }
   ];
   var RULES = {
@@ -332,6 +417,12 @@ _UI_JS = r"""
     playground: "🔓 <b>Plac zabaw:</b> zaczynamy w węźle <b>START</b> i odwiedzamy <b>cały graf</b>, ale sąsiadów możesz brać " +
           "w <b>dowolnej kolejności</b> – zaliczona jest każda kolejność, którą naprawdę mógłby dać BFS albo DFS. " +
           "Po poprawnej odpowiedzi zobaczysz, ile takich kolejności w ogóle jest."
+  };
+  var DFS_NOTE = "<br>🔁 <b>DFS</b> możesz zapisać na dwa sposoby: <b>preorder</b> – węzeł zapisujemy, gdy do niego " +
+          "<b>wchodzimy</b> (lista zaczyna się od START), albo <b>postorder</b> – gdy z niego <b>wychodzimy</b>, " +
+          "bo wszyscy jego sąsiedzi są już odwiedzeni (lista kończy się na START). Program sam rozpozna, który zapisano.";
+  var KEYNAME = {
+    bfs: "BFS", dfs: "DFS preorder", dfspost: "DFS postorder"
   };
   var S = { g: null, mode: CFG.mode, active: "bfs", ans: { bfs: [], dfs: [], path: [] }, res: {}, reveal: false,
             note: "", enumc: {}, gal: null, timer: null };
@@ -362,16 +453,16 @@ _UI_JS = r"""
   // ---- galeria wszystkich kolejnosci ----
   function stopPlay() { if (S.timer) { clearInterval(S.timer); S.timer = null; } }
   function closeGallery() { stopPlay(); S.gal = null; }
-  function openGallery(kind) {
+  function openGallery(task, key) {
     stopPlay();
-    var list = orders(kind).list, mine = S.ans[kind].join(","), idx = 0;
+    var list = orders(key).list, mine = S.ans[task].join(","), idx = 0;
     for (var i = 0; i < list.length; i++) if (list[i].join(",") === mine) { idx = i; break; }
-    S.gal = { task: kind, idx: idx };
-    S.active = kind;
+    S.gal = { task: task, key: key, idx: idx };
+    S.active = task;
     render();
   }
   function galStep(d) {
-    var list = orders(S.gal.task).list;
+    var list = orders(S.gal.key).list;
     S.gal.idx = (S.gal.idx + d + list.length) % list.length;
     render();
   }
@@ -410,7 +501,7 @@ _UI_JS = r"""
 
   function drawGraph() {
     var g = S.g, svg = $(".tq-svg"), t = task(S.active);
-    var list = (S.gal && S.gal.task === S.active) ? orders(S.gal.task).list[S.gal.idx] : S.ans[S.active];
+    var list = (S.gal && S.gal.task === S.active) ? orders(S.gal.key).list[S.gal.idx] : S.ans[S.active];
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     function k(a, b) { return Math.min(a, b) + "-" + Math.max(a, b); }
     var pathEdges = {}, shortEdges = {};
@@ -449,24 +540,32 @@ _UI_JS = r"""
   }
 
   // dodatkowe informacje pod zadaniem BFS/DFS: liczba kolejnosci + galeria
+  // (dla DFS osobno preorder i postorder; najpierw ten, ktory student zapisal)
   function extraTraversal(t) {
     var res = S.res[t.id], html = "";
-    var showCount = (res && res.ok) || S.reveal;
-    if (!showCount) return "";
-    var e = orders(t.id), name = t.id.toUpperCase();
-    if (S.mode === "exam")
-      html += "<div class='tq-more'>🔢 Bez zasady „rosnąco” " + name + " mógłby dać na tym grafie <b>" + countText(e) + "</b>.";
-    else {
-      var mine = S.ans[t.id].join(","), pos = -1;
-      for (var i = 0; i < e.list.length; i++) if (e.list[i].join(",") === mine) { pos = i; break; }
-      html += "<div class='tq-more'>🔢 " + name + " ma na tym grafie <b>" + countText(e) + "</b>" +
-              (res && res.ok && pos >= 0 ? " – Twoja to <b>#" + TQ.fmt(pos + 1) + "</b>." : ".") +
-              (pos === 0 ? " To akurat kolejność „egzaminacyjna” (rosnąco)." : "");
-    }
-    if (!(S.gal && S.gal.task === t.id))
-      html += " <button class='tq-gal-open'>🎞 Pokaż wszystkie</button>";
-    html += "</div>";
-    if (S.gal && S.gal.task === t.id) {
+    if (!((res && res.ok) || S.reveal)) return "";
+    var keys = t.id === "bfs" ? ["bfs"] : (res && res.ok && res.which === "post" ? ["dfspost", "dfs"] : ["dfs", "dfspost"]);
+    keys.forEach(function (key) {
+      var e = orders(key), name = KEYNAME[key], mineKey = res && res.ok && (key === "dfspost") === (res.which === "post");
+      if (S.mode === "exam")
+        html += "<div class='tq-more'>🔢 Bez zasady „rosnąco” " + name + " mógłby dać na tym grafie <b>" + countText(e) + "</b>.";
+      else {
+        var mine = S.ans[t.id].join(","), pos = -1;
+        if (mineKey) for (var i = 0; i < e.list.length; i++) if (e.list[i].join(",") === mine) { pos = i; break; }
+        html += "<div class='tq-more'>🔢 " + name + " ma na tym grafie <b>" + countText(e) + "</b>" +
+                (pos >= 0 ? " – Twoja to <b>#" + TQ.fmt(pos + 1) + "</b>." : ".") +
+                (pos === 0 ? " To akurat kolejność „egzaminacyjna” (rosnąco)." : "");
+      }
+      if (!(S.gal && S.gal.key === key))
+        html += " <button class='tq-gal-open' data-key='" + key + "'>🎞 Pokaż wszystkie</button>";
+      html += "</div>";
+      if (S.gal && S.gal.key === key) html += galleryHtml(t, e);
+    });
+    return html;
+  }
+  function galleryHtml(t, e) {
+    var html = "";
+    {
       var shown = e.list.length, seq = e.list[S.gal.idx];
       html += "<div class='tq-gal'>" +
         "<button class='tq-gal-prev' title='Poprzednia'>◀</button>" +
@@ -502,9 +601,13 @@ _UI_JS = r"""
         : "<span class='tq-ph'>" + (active ? "kliknij węzły na grafie…" : "kliknij tutaj, żeby wybrać to zadanie") + "</span>";
       var tag = (S.mode === "exam" && t.id !== "path") ? "<span class='tq-tag'>↑ rosnąco</span>" : "";
       var sol = "";
-      if (S.reveal && t.id !== "path")
-        sol = "<div class='tq-sol'>" + (S.mode === "exam" ? "Rozwiązanie" : "Przykład (kolejność egzaminacyjna)") +
-              ": <b>" + S.g[t.id].join(" → ") + "</b></div>";
+      if (S.reveal && t.id !== "path") {
+        var lead = S.mode === "exam" ? "Rozwiązanie" : "Przykład (kolejność egzaminacyjna)";
+        sol = t.id === "bfs"
+          ? "<div class='tq-sol'>" + lead + ": <b>" + S.g.bfs.join(" → ") + "</b></div>"
+          : "<div class='tq-sol'>" + lead + " – preorder: <b>" + S.g.dfs.join(" → ") + "</b></div>" +
+            "<div class='tq-sol'>" + lead + " – postorder: <b>" + S.g.dfspost.join(" → ") + "</b></div>";
+      }
       row.innerHTML =
         "<div class='tq-head'><span class='tq-radio'></span><b>" + t.title + "</b>" + tag +
         "<span class='tq-btns'><button class='tq-undo' title='Cofnij ostatni'>⌫</button><button class='tq-clear' title='Wyczyść'>✕</button></span></div>" +
@@ -513,12 +616,13 @@ _UI_JS = r"""
         sol + (t.id === "path" ? extraPath(t) : extraTraversal(t));
       row.addEventListener("click", function () { if (S.active !== t.id) { S.active = t.id; S.note = ""; render(); } });
       function on(sel, fn) {
-        var b = row.querySelector(sel);
-        if (b) b.addEventListener("click", function (ev) { ev.stopPropagation(); fn(); });
+        row.querySelectorAll(sel).forEach(function (b) {
+          b.addEventListener("click", function (ev) { ev.stopPropagation(); fn(b); });
+        });
       }
       on(".tq-undo", function () { if (S.gal) closeGallery(); S.active = t.id; seq.pop(); delete S.res[t.id]; render(); });
       on(".tq-clear", function () { if (S.gal) closeGallery(); S.active = t.id; seq.length = 0; delete S.res[t.id]; render(); });
-      on(".tq-gal-open", function () { openGallery(t.id); });
+      on(".tq-gal-open", function (b) { openGallery(t.id, b.getAttribute("data-key")); });
       on(".tq-gal-prev", function () { stopPlay(); galStep(-1); });
       on(".tq-gal-next", function () { stopPlay(); galStep(1); });
       on(".tq-gal-play", togglePlay);
@@ -532,7 +636,7 @@ _UI_JS = r"""
     root.querySelectorAll(".tq-mode button").forEach(function (b) {
       b.className = b.getAttribute("data-mode") === S.mode ? "tq-on" : "";
     });
-    $(".tq-rule").innerHTML = RULES[S.mode];
+    $(".tq-rule").innerHTML = RULES[S.mode] + DFS_NOTE;
     $(".tq-info").innerHTML = "START: <b class='tq-start'>" + g.start + "</b> &nbsp;·&nbsp; CEL: <b class='tq-goal'>" + g.target +
       "</b> &nbsp;·&nbsp; węzłów: " + g.n + ", krawędzi: " + g.edges.length;
     $(".tq-note").textContent = S.note;
