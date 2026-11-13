@@ -12,9 +12,12 @@ Dwa tryby:
   * "exam" (📝 Egzamin) - sasiadow rozpatrujemy w kolejnosci rosnacych numerow, wiec jest
     dokladnie jedna poprawna kolejnosc (da sie ocenic). DFS = wersja rekurencyjna (ta sama
     kolejnosc co iteracyjny DFS z lab_search, ktory odklada sasiadow na stos odwrotnie).
-  * "playground" (🔓 Plac zabaw) - akceptowana jest kazda poprawna kolejnosc BFS/DFS.
-W obu trybach po poprawnej odpowiedzi mozna obejrzec WSZYSTKIE poprawne kolejnosci
-(galeria), a dla sciezki - wszystkie najkrotsze sciezki. W obu trybach przechodzimy caly
+    Odpowiedzi zatwierdza sie RAZ (🔒) - dopiero wtedy widac wynik i poprawne rozwiazanie;
+    nie ma przycisku "Pokaz rozwiazanie", kolejna proba = nowy graf (wejscie w tryb egzaminu
+    tez losuje nowy graf).
+  * "playground" (🔓 Plac zabaw) - akceptowana jest kazda poprawna kolejnosc BFS/DFS, mozna
+    sprawdzac wiele razy, jest "Pokaz rozwiazanie" i galeria WSZYSTKICH poprawnych kolejnosci.
+Po sprawdzeniu sciezki widac wszystkie najkrotsze sciezki. W obu trybach przechodzimy caly
 graf (nie zatrzymujemy sie na celu).
 
 Sprawdzanie i galeria korzystaja z tej samej funkcji "dozwolone nastepne wezly":
@@ -413,7 +416,9 @@ _UI_JS = r"""
   var RULES = {
     exam: "📏 <b>Zasady (egzamin):</b> zaczynamy w węźle <b>START</b>; sąsiadów rozpatrujemy zawsze w kolejności " +
           "<b>rosnących numerów</b> – dzięki temu jest dokładnie jedna poprawna kolejność; odwiedzamy <b>cały graf</b> " +
-          "(nie zatrzymujemy się na celu). DFS – wersja rekurencyjna (tak samo jak stos LIFO w symulatorze). Graf jest nieskierowany.",
+          "(nie zatrzymujemy się na celu). DFS – wersja rekurencyjna (tak samo jak stos LIFO w symulatorze). Graf jest nieskierowany." +
+          "<br>🔒 Odpowiedzi <b>zatwierdzasz raz</b> – dopiero wtedy zobaczysz wynik i poprawne rozwiązanie. " +
+          "Kolejna próba = <b>🎲 Nowy graf</b>.",
     playground: "🔓 <b>Plac zabaw:</b> zaczynamy w węźle <b>START</b> i odwiedzamy <b>cały graf</b>, ale sąsiadów możesz brać " +
           "w <b>dowolnej kolejności</b> – zaliczona jest każda kolejność, którą naprawdę mógłby dać BFS albo DFS. " +
           "Po poprawnej odpowiedzi zobaczysz, ile takich kolejności w ogóle jest."
@@ -425,7 +430,9 @@ _UI_JS = r"""
     bfs: "BFS", dfs: "DFS preorder", dfspost: "DFS postorder"
   };
   var S = { g: null, mode: CFG.mode, active: "bfs", ans: { bfs: [], dfs: [], path: [] }, res: {}, reveal: false,
-            note: "", enumc: {}, gal: null, timer: null };
+            note: "", enumc: {}, gal: null, timer: null, locked: false, confirm: false };
+  // egzamin: odpowiedzi zatwierdza sie raz (locked); confirm = czeka na drugie klikniecie przy niepelnych odpowiedziach
+  function exam() { return S.mode === "exam"; }
   var NS = "http://www.w3.org/2000/svg";
   function $(sel) { return root.querySelector(sel); }
   function task(id) { return TASKS.filter(function (t) { return t.id === id; })[0]; }
@@ -481,18 +488,26 @@ _UI_JS = r"""
     S.g = TQ.generate(n, dens, seed);
     $(".tq-seed").value = seed;
     S.ans = { bfs: [], dfs: [], path: [] }; S.res = {}; S.reveal = false; S.note = ""; S.enumc = {};
+    S.locked = false; S.confirm = false;
     $(".tq-show").textContent = "👁 Pokaż rozwiązanie";
     render();
   }
   function setMode(m) {
     if (S.mode === m) return;
     closeGallery();
-    S.mode = m; S.res = {}; S.note = "";
+    S.mode = m; S.res = {}; S.note = ""; S.locked = false; S.confirm = false;
+    // do egzaminu wchodzimy zawsze na swiezym grafie (nie na tym, ktory widzielismy na placu zabaw)
+    if (m === "exam") { newGraph(randomSeed()); return; }
     render();
   }
   function randomSeed() { return Math.floor(Math.random() * 100000); }
 
   function clickNode(v) {
+    if (S.locked) {
+      S.note = "🔒 Odpowiedzi są już zatwierdzone. Kliknij 🎲 Nowy graf, żeby spróbować jeszcze raz.";
+      render(); return;
+    }
+    S.confirm = false;
     if (S.gal) closeGallery();
     var list = S.ans[S.active];
     if (list.indexOf(v) >= 0) { S.note = "Węzeł " + v + " już jest na tej liście."; render(); return; }
@@ -543,19 +558,16 @@ _UI_JS = r"""
   // (dla DFS osobno preorder i postorder; najpierw ten, ktory student zapisal)
   function extraTraversal(t) {
     var res = S.res[t.id], html = "";
+    if (exam()) return "";   // wszystkie kolejnosci i galeria - tylko na placu zabaw
     if (!((res && res.ok) || S.reveal)) return "";
     var keys = t.id === "bfs" ? ["bfs"] : (res && res.ok && res.which === "post" ? ["dfspost", "dfs"] : ["dfs", "dfspost"]);
     keys.forEach(function (key) {
       var e = orders(key), name = KEYNAME[key], mineKey = res && res.ok && (key === "dfspost") === (res.which === "post");
-      if (S.mode === "exam")
-        html += "<div class='tq-more'>🔢 Bez zasady „rosnąco” " + name + " mógłby dać na tym grafie <b>" + countText(e) + "</b>.";
-      else {
-        var mine = S.ans[t.id].join(","), pos = -1;
-        if (mineKey) for (var i = 0; i < e.list.length; i++) if (e.list[i].join(",") === mine) { pos = i; break; }
-        html += "<div class='tq-more'>🔢 " + name + " ma na tym grafie <b>" + countText(e) + "</b>" +
-                (pos >= 0 ? " – Twoja to <b>#" + TQ.fmt(pos + 1) + "</b>." : ".") +
-                (pos === 0 ? " To akurat kolejność „egzaminacyjna” (rosnąco)." : "");
-      }
+      var mine = S.ans[t.id].join(","), pos = -1;
+      if (mineKey) for (var i = 0; i < e.list.length; i++) if (e.list[i].join(",") === mine) { pos = i; break; }
+      html += "<div class='tq-more'>🔢 " + name + " ma na tym grafie <b>" + countText(e) + "</b>" +
+              (pos >= 0 ? " – Twoja to <b>#" + TQ.fmt(pos + 1) + "</b>." : ".") +
+              (pos === 0 ? " To akurat kolejność „egzaminacyjna” (rosnąco)." : "");
       if (!(S.gal && S.gal.key === key))
         html += " <button class='tq-gal-open' data-key='" + key + "'>🎞 Pokaż wszystkie</button>";
       html += "</div>";
@@ -601,8 +613,10 @@ _UI_JS = r"""
         : "<span class='tq-ph'>" + (active ? "kliknij węzły na grafie…" : "kliknij tutaj, żeby wybrać to zadanie") + "</span>";
       var tag = (S.mode === "exam" && t.id !== "path") ? "<span class='tq-tag'>↑ rosnąco</span>" : "";
       var sol = "";
-      if (S.reveal && t.id !== "path") {
-        var lead = S.mode === "exam" ? "Rozwiązanie" : "Przykład (kolejność egzaminacyjna)";
+      // egzamin: poprawna odpowiedz dopiero po zatwierdzeniu (i tylko przy blednej); plac zabaw: przycisk "Pokaz rozwiazanie"
+      var showSol = t.id !== "path" && (exam() ? S.locked && res && !res.ok : S.reveal);
+      if (showSol) {
+        var lead = exam() ? "Poprawna odpowiedź" : "Przykład (kolejność egzaminacyjna)";
         sol = t.id === "bfs"
           ? "<div class='tq-sol'>" + lead + ": <b>" + S.g.bfs.join(" → ") + "</b></div>"
           : "<div class='tq-sol'>" + lead + " – preorder: <b>" + S.g.dfs.join(" → ") + "</b></div>" +
@@ -610,7 +624,9 @@ _UI_JS = r"""
       }
       row.innerHTML =
         "<div class='tq-head'><span class='tq-radio'></span><b>" + t.title + "</b>" + tag +
-        "<span class='tq-btns'><button class='tq-undo' title='Cofnij ostatni'>⌫</button><button class='tq-clear' title='Wyczyść'>✕</button></span></div>" +
+        (S.locked ? "<span class='tq-btns'>🔒</span>" :
+         "<span class='tq-btns'><button class='tq-undo' title='Cofnij ostatni'>⌫</button><button class='tq-clear' title='Wyczyść'>✕</button></span>") +
+        "</div>" +
         "<div class='tq-seq'>" + chips + "</div>" +
         (res ? "<div class='tq-res'><span class='tq-face'>" + (res.ok ? "😀" : "😢") + "</span><span>" + res.msg + "</span></div>" : "") +
         sol + (t.id === "path" ? extraPath(t) : extraTraversal(t));
@@ -620,8 +636,8 @@ _UI_JS = r"""
           b.addEventListener("click", function (ev) { ev.stopPropagation(); fn(b); });
         });
       }
-      on(".tq-undo", function () { if (S.gal) closeGallery(); S.active = t.id; seq.pop(); delete S.res[t.id]; render(); });
-      on(".tq-clear", function () { if (S.gal) closeGallery(); S.active = t.id; seq.length = 0; delete S.res[t.id]; render(); });
+      on(".tq-undo", function () { if (S.gal) closeGallery(); S.confirm = false; S.active = t.id; seq.pop(); delete S.res[t.id]; render(); });
+      on(".tq-clear", function () { if (S.gal) closeGallery(); S.confirm = false; S.active = t.id; seq.length = 0; delete S.res[t.id]; render(); });
       on(".tq-gal-open", function (b) { openGallery(t.id, b.getAttribute("data-key")); });
       on(".tq-gal-prev", function () { stopPlay(); galStep(-1); });
       on(".tq-gal-next", function () { stopPlay(); galStep(1); });
@@ -641,15 +657,40 @@ _UI_JS = r"""
       "</b> &nbsp;·&nbsp; węzłów: " + g.n + ", krawędzi: " + g.edges.length;
     $(".tq-note").textContent = S.note;
     drawGraph(); drawTasks();
-    var all = TASKS.every(function (t) { return S.res[t.id] && S.res[t.id].ok; });
+    var nOk = TASKS.filter(function (t) { return S.res[t.id] && S.res[t.id].ok; }).length, all = nOk === TASKS.length;
     var any = TASKS.some(function (t) { return S.res[t.id]; });
-    $(".tq-summary").innerHTML = all ? "🎉 Wszystko dobrze! Zauważ: kolejność odwiedzania BFS to <i>nie</i> to samo co najkrótsza ścieżka – " +
-      "ścieżkę odczytujemy z drzewa przeszukiwania (kto kogo odkrył), a nie z listy odwiedzin."
-      : any ? "Popraw czerwone odpowiedzi i sprawdź jeszcze raz." : "";
+    var praise = "🎉 Wszystko dobrze! Zauważ: kolejność odwiedzania BFS to <i>nie</i> to samo co najkrótsza ścieżka – " +
+      "ścieżkę odczytujemy z drzewa przeszukiwania (kto kogo odkrył), a nie z listy odwiedzin.";
+    $(".tq-summary").innerHTML = exam()
+      ? (S.locked ? "📊 Wynik: <b>" + nOk + " / " + TASKS.length + "</b>. " + (all ? praise : "") +
+                    "<br>Chcesz spróbować jeszcze raz? Kliknij <b>🎲 Nowy graf</b>. Wszystkie poprawne kolejności " +
+                    "(bez zasady „rosnąco”) zobaczysz w trybie <b>🔓 Plac zabaw</b>." : "")
+      : (all ? praise : any ? "Popraw czerwone odpowiedzi i sprawdź jeszcze raz." : "");
+    var cb = $(".tq-check");
+    cb.textContent = !exam() ? "✔ Sprawdź" : S.locked ? "🔒 Zatwierdzone"
+                   : S.confirm ? "🔒 Tak, zatwierdź mimo to" : "🔒 Zatwierdź odpowiedzi";
+    cb.disabled = exam() && S.locked;
+    $(".tq-show").style.display = exam() ? "none" : "";
   }
 
   function check() {
     var g = S.g;
+    if (exam()) {
+      if (S.locked) return;
+      var missing = [];
+      if (S.ans.bfs.length < g.n) missing.push("BFS");
+      if (S.ans.dfs.length < g.n) missing.push("DFS");
+      var p = S.ans.path;
+      if (!p.length || p[p.length - 1] !== g.target) missing.push("ścieżka");
+      if (missing.length && !S.confirm) {
+        S.confirm = true;
+        S.note = "⚠️ Niekompletne odpowiedzi: " + missing.join(", ") + ". Po zatwierdzeniu nie da się ich już poprawić – " +
+                 "kliknij jeszcze raz, żeby zatwierdzić mimo to.";
+        render(); return;
+      }
+      closeGallery();
+      S.locked = true; S.confirm = false;
+    }
     S.res = { bfs: TQ.checkTraversal(g, "bfs", S.ans.bfs, S.mode), dfs: TQ.checkTraversal(g, "dfs", S.ans.dfs, S.mode),
               path: TQ.checkPath(g, S.ans.path) };
     S.note = ""; render();
@@ -693,6 +734,7 @@ _CSS = r"""
 .tq-card button:hover{background:#e9ecef}
 .tq-card button.tq-check{background:#2f9e44;border-color:#2b8a3e;color:#fff;font-weight:700}
 .tq-card button.tq-check:hover{background:#2b8a3e}
+.tq-card button.tq-check:disabled{background:#868e96;border-color:#868e96;cursor:default}
 .tq-rule{background:#f1f3f5;border-radius:6px;padding:6px 10px;margin:6px 0;color:#343a40;font-size:13px}
 .tq-info{margin:4px 0;color:#212529}
 .tq-start{color:#2f9e44}.tq-goal{color:#b08900}
