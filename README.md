@@ -10,6 +10,7 @@ Notebooki działają w **Google Colab** bez instalowania czegokolwiek – klikni
 |---|---|---|
 | 2 | Przestrzenie stanów: świat odkurzacza, pojemniki z wodą | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BartekDaniluk/kognitywistyka_intro_to_AI/blob/main/lab02_stany/01_przestrzenie_stanow.ipynb) |
 | 3 | Przeszukiwanie przestrzeni stanów: BFS, DFS (iteracyjnie i rekurencyjnie) oraz głowice uwagi (Attention Heads) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BartekDaniluk/kognitywistyka_intro_to_AI/blob/main/lab03_przeszukiwanie/02_przeszukiwanie_bfs_dfs.ipynb) |
+| 4 | Wieże Hanoi: przestrzeń stanów, graf (trójkąt Sierpińskiego) i porównanie z BFS / DFS | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BartekDaniluk/kognitywistyka_intro_to_AI/blob/main/lab04_hanoi/03_wieze_hanoi.ipynb) |
 
 ## Uruchomienie lokalnie
 
