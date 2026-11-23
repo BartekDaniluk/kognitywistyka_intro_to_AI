@@ -525,23 +525,55 @@ def hanoi_space_app():
 
 
 # --------------------------------------------------------------------------
-# Interaktywne cwiczenie w przegladarce (HTML + SVG + JS, bez ipywidgets)
-# Student sam rozwiazuje Wieze Hanoi (min. 2 krazki, min. 2 slupki)
-# i porownuje swoja liczbe ruchow z BFS (najkrotsza sciezka) oraz DFS!
+# Interaktywne 3-czesciowe cwiczenie w przegladarce (HTML + SVG + JS, bez ipywidgets):
+#   1. Formalizacja stanu START (krotka + dozwolone akcje X -> Y) [Lab 2]
+#   2. Analiza srodkow i celow (podcel / most w trojkacie Sierpinskiego) [Newell & Simon]
+#   3. Najkrotsza sciezka START -> CEL na slupkach + porownanie z BFS i DFS [Lab 3 & 4]
+# Dwa tryby: "exam" (📝 Egzamin - jednorazowe zatwierdzenie 🔒) oraz "playground" (🔓 Plac zabaw).
 # --------------------------------------------------------------------------
+HANOI_MODES = ("exam", "playground")
+
 _HANOI_LOGIC_JS = r"""
 var HN = (function () {
   var PEGS = ["A", "B", "C", "D", "E"];
   var COLORS = ["#e03131", "#f08c00", "#2f9e44", "#1971c2", "#9c36b5", "#0ca678"];
 
+  function rng(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
   function stateKey(s) { return s.join(","); }
-  function stateLabel(s) { return "(" + s.map(function (p) { return PEGS[p]; }).join(", ") + ")"; }
+  function stateLabel(s) {
+    return "(" + s.map(function (p) { return p === null || p < 0 ? "?" : PEGS[p]; }).join(", ") + ")";
+  }
+  function stateEq(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
 
   function topDisks(s, k) {
     var top = [];
     for (var p = 0; p < k; p++) top.push(-1);
     for (var d = s.length - 1; d >= 0; d--) top[s[d]] = d;
     return top;
+  }
+
+  function allActionLabels(k) {
+    var out = [];
+    for (var u = 0; u < k; u++) {
+      for (var v = 0; v < k; v++) {
+        if (u !== v) out.push({ from: u, to: v, label: PEGS[u] + "→" + PEGS[v] });
+      }
+    }
+    return out;
   }
 
   function validMoves(s, k) {
@@ -561,15 +593,36 @@ var HN = (function () {
     return out;
   }
 
-  function isGoal(s, k) {
+  function isGoal(s, k, goalState) {
+    if (goalState) return stateEq(s, goalState);
     for (var i = 0; i < s.length; i++) if (s[i] !== k - 1) return false;
     return true;
   }
 
-  // Rozwiazanie BFS (kolejka FIFO -> gwarantuje najkrotsza sciezke)
-  function runBFS(n, k) {
-    var start = [], i;
-    for (i = 0; i < n; i++) start.push(0);
+  // Pelna mapa odleglosci BFS od zadanego stanu startowego
+  function bfsDistances(n, k, startState) {
+    var sk = stateKey(startState);
+    var dist = {}, q = [startState.slice()];
+    dist[sk] = 0;
+    while (q.length) {
+      var u = q.shift(), uk = stateKey(u), d = dist[uk];
+      var moves = validMoves(u, k);
+      for (var i = 0; i < moves.length; i++) {
+        var vk = stateKey(moves[i].next);
+        if (dist[vk] === undefined) {
+          dist[vk] = d + 1;
+          q.push(moves[i].next);
+        }
+      }
+    }
+    return dist;
+  }
+
+  // Rozwiazanie BFS (kolejka FIFO -> gwarantuje najkrotsza sciezke ze startState do goalState)
+  function runBFS(n, k, startState, goalState) {
+    var start = startState ? startState.slice() : [], i;
+    if (!start.length) for (i = 0; i < n; i++) start.push(0);
+    var goal = goalState ? goalState.slice() : null;
     var sk = stateKey(start);
     var q = [start], seen = {}, par = {}, order = [];
     seen[sk] = true;
@@ -579,7 +632,7 @@ var HN = (function () {
     while (q.length) {
       var u = q.shift(), uk = stateKey(u);
       order.push(u);
-      if (isGoal(u, k)) { goalKey = uk; break; }
+      if (isGoal(u, k, goal)) { goalKey = uk; break; }
       var moves = validMoves(u, k);
       for (i = 0; i < moves.length; i++) {
         var mv = moves[i], vk = stateKey(mv.next);
@@ -609,10 +662,11 @@ var HN = (function () {
     };
   }
 
-  // Rozwiazanie DFS (stos LIFO / rekurencja -> sasiad w porzadku leksykograficznym par slupkow)
-  function runDFS(n, k) {
-    var start = [], i;
-    for (i = 0; i < n; i++) start.push(0);
+  // Rozwiazanie DFS (stos LIFO -> sasiad w porzadku leksykograficznym par slupkow)
+  function runDFS(n, k, startState, goalState) {
+    var start = startState ? startState.slice() : [], i;
+    if (!start.length) for (i = 0; i < n; i++) start.push(0);
+    var goal = goalState ? goalState.slice() : null;
     var seen = {}, par = {}, order = [];
     var stack = [{ state: start, prevKey: null, move: null }];
     var goalKey = null;
@@ -623,7 +677,7 @@ var HN = (function () {
       seen[uk] = true;
       order.push(u);
       par[uk] = item.prevKey === null ? null : item;
-      if (isGoal(u, k)) { goalKey = uk; break; }
+      if (isGoal(u, k, goal)) { goalKey = uk; break; }
       var moves = validMoves(u, k);
       for (i = moves.length - 1; i >= 0; i--) {
         var mv = moves[i], vk = stateKey(mv.next);
@@ -651,6 +705,253 @@ var HN = (function () {
     };
   }
 
+  // Generowanie zadania (losowej lub klasycznej pary START -> CEL wraz z podcelem / mostem)
+  function generateTask(n, k, seed, preset) {
+    var i, start = [], goal = [], subgoal = [], bridgeOut = [];
+    var u = 0, v = k - 1, w = 1;
+
+    if (preset === "classic" || k !== 3) {
+      for (i = 0; i < n; i++) { start.push(0); goal.push(k - 1); }
+      u = 0; v = k - 1; w = k >= 3 ? 1 : 0;
+      for (i = 0; i < n - 1; i++) { subgoal.push(w); bridgeOut.push(w); }
+      subgoal.push(u);
+      bridgeOut.push(v);
+    } else {
+      var r = rng(seed);
+      var subStates = [];
+      (function genSub(prefix) {
+        if (prefix.length === n - 1) { subStates.push(prefix); return; }
+        for (var p = 0; p < 3; p++) genSub(prefix.concat([p]));
+      })([]);
+
+      u = Math.floor(r() * 3);
+      v = (u + 1 + Math.floor(r() * 2)) % 3;
+      w = 3 - u - v;
+
+      for (i = 0; i < n - 1; i++) { subgoal.push(w); bridgeOut.push(w); }
+      subgoal.push(u);
+      bridgeOut.push(v);
+
+      var distFromSub = bfsDistances(n, 3, subgoal);
+      var distFromOut = bfsDistances(n, 3, bridgeOut);
+
+      // Odleglosc przez drogi okrezne (przez trzeci podtrojkat w):
+      // wejscie do w wymaga stanu (v,...,v,u) -> (v,...,v,w), przejscie przez w (2^(n-1)-1), i (u,...,u,w) -> (u,...,u,v)
+      var altIn = [], altOut = [];
+      for (i = 0; i < n - 1; i++) { altIn.push(v); altOut.push(u); }
+      altIn.push(u); altOut.push(v);
+      var distFromAltIn = bfsDistances(n, 3, altIn);
+      var distFromAltOut = bfsDistances(n, 3, altOut);
+      var wTraverse = Math.pow(2, n - 1) - 1;
+
+      var minTotal = n === 2 ? 2 : (n === 3 ? 4 : 6);
+      var maxTotal = n === 2 ? 3 : (n === 3 ? 7 : 10);
+      var minSide = 1;
+      var maxSide = n === 2 ? 1 : (n === 3 ? 3 : 5);
+
+      var candidates = [];
+      for (var si = 0; si < subStates.length; si++) {
+        var sCand = subStates[si].concat([u]);
+        var sk = stateKey(sCand);
+        var d1 = distFromSub[sk];
+        if (d1 < minSide || d1 > maxSide) continue;
+        for (var gi = 0; gi < subStates.length; gi++) {
+          var gCand = subStates[gi].concat([v]);
+          var gk = stateKey(gCand);
+          var d2 = distFromOut[gk];
+          if (d2 < minSide || d2 > maxSide) continue;
+          var directLen = d1 + 1 + d2;
+          if (directLen < minTotal || directLen > maxTotal) continue;
+          var indirectLen = distFromAltIn[sk] + 1 + wTraverse + 1 + distFromAltOut[gk];
+          if (directLen >= indirectLen) continue; // gwarantuje jednoznacznosc mostu na najkrotszej sciezce
+          // Pomin klasyczna pare, w ktorej wszystkie krazki leza na jednym slupku w obu stanach
+          var allSameS = sCand.every(function (p) { return p === u; });
+          var allSameG = gCand.every(function (p) { return p === v; });
+          if (n >= 3 && allSameS && allSameG) continue;
+          candidates.push({ start: sCand, goal: gCand, len: directLen });
+        }
+      }
+      if (!candidates.length) {
+        // Fallback awaryjny
+        start = [w, u];
+        while (start.length < n) start.unshift(u);
+        goal = [w, v];
+        while (goal.length < n) goal.unshift(v);
+      } else {
+        var pick = candidates[Math.floor(r() * candidates.length)];
+        start = pick.start;
+        goal = pick.goal;
+      }
+    }
+
+    var bfs = runBFS(n, k, start, goal);
+    var dfs = runDFS(n, k, start, goal);
+    var validStart = validMoves(start, k).map(function (m) { return m.label; });
+
+    return {
+      n: n,
+      k: k,
+      seed: seed,
+      preset: preset || "random",
+      start: start,
+      goal: goal,
+      subgoal: subgoal,
+      bridgeOut: bridgeOut,
+      fromPeg: u,
+      toPeg: v,
+      auxPeg: w,
+      bridgeMoveLabel: PEGS[u] + "→" + PEGS[v],
+      validStartActions: validStart,
+      bfs: bfs,
+      dfs: dfs
+    };
+  }
+
+  // ---- Funkcje sprawdzajace 3 zadania ----
+  function checkTask1(task, givenTuple, selectedActions) {
+    var n = task.n, k = task.k, start = task.start;
+    if (!givenTuple || givenTuple.length !== n || givenTuple.some(function (p) { return p === null || p === undefined || p < 0; })) {
+      return { ok: false, msg: "Część 1a: wybierz słupek (A, B lub C) dla każdego krążka p₁ … p" + n + " w stanie START." };
+    }
+    var tupleOk = stateEq(givenTuple, start);
+    var tupleMsg = "";
+    if (!tupleOk) {
+      var rev = start.slice().reverse();
+      if (stateEq(givenTuple, rev) && !stateEq(start, rev)) {
+        tupleMsg = "Uwaga na kolejność w krotce! Zapisałeś(aś) krążki od największego do najmniejszego, a p₁ to krążek #1 (najmniejszy), …, p" + n + " to krążek #" + n + " (największy).";
+      } else {
+        for (var i = 0; i < n; i++) {
+          if (givenTuple[i] !== start[i]) {
+            tupleMsg = "W stanie START krążek #" + (i + 1) + " (p" + (i + 1) + ") nie leży na słupku " + PEGS[givenTuple[i]] + " – spójrz na rysunek stanu START.";
+            break;
+          }
+        }
+      }
+    }
+
+    var acts = selectedActions || [];
+    if (!acts.length) {
+      return {
+        ok: false,
+        msg: (tupleOk ? "Krotka stanu START " + stateLabel(start) + " poprawna! " : "Błąd w krotce (" + tupleMsg + ") oraz ") +
+             "Część 1b: zaznacz przynajmniej jedną dozwoloną akcję (X→Y) w stanie START."
+      };
+    }
+
+    var expected = task.validStartActions;
+    var top = topDisks(start, k);
+    var wrongActMsg = "";
+    for (var a = 0; a < acts.length; a++) {
+      var lbl = acts[a];
+      if (expected.indexOf(lbl) < 0) {
+        var u = PEGS.indexOf(lbl.charAt(0));
+        var v = PEGS.indexOf(lbl.charAt(lbl.length - 1));
+        if (top[u] < 0) {
+          wrongActMsg = "Akcja <b>" + lbl + "</b> jest niedozwolona w stanie START, bo słupek <b>" + PEGS[u] + "</b> jest pusty.";
+        } else {
+          wrongActMsg = "Akcja <b>" + lbl + "</b> jest niedozwolona w stanie START: na słupku <b>" + PEGS[u] +
+            "</b> na wierzchu leży krążek <b>#" + (top[u] + 1) + "</b>, którego nie wolno położyć na mniejszy krążek <b>#" +
+            (top[v] + 1) + "</b> na słupku <b>" + PEGS[v] + "</b>.";
+        }
+        break;
+      }
+    }
+    if (!wrongActMsg && acts.length < expected.length) {
+      wrongActMsg = "Zaznaczone akcje są poprawne, ale to nie wszystkie! W stanie START dozwolone są <b>" +
+        expected.length + "</b> akcje (zaznaczono " + acts.length + ").";
+    }
+
+    if (tupleOk && !wrongActMsg) {
+      return {
+        ok: true,
+        msg: "Świetnie! Stan START to <b>" + stateLabel(start) + "</b>, a dozwolone w nim akcje to: <b>" + expected.join(", ") + "</b>."
+      };
+    }
+    if (tupleOk && wrongActMsg) {
+      return { ok: false, msg: "Krotka stanu START <b>" + stateLabel(start) + "</b> poprawna, ale w części 1b: " + wrongActMsg };
+    }
+    if (!tupleOk && !wrongActMsg) {
+      return { ok: false, msg: "Dozwolone akcje zaznaczone bezbłędnie! Błąd w części 1a (krotka stanu START): " + tupleMsg };
+    }
+    return { ok: false, msg: "Część 1a: " + tupleMsg + " Część 1b: " + wrongActMsg };
+  }
+
+  function checkTask2(task, givenTuple) {
+    var n = task.n, u = task.fromPeg, v = task.toPeg, w = task.auxPeg;
+    if (!givenTuple || givenTuple.length !== n || givenTuple.some(function (p) { return p === null || p === undefined || p < 0; })) {
+      return { ok: false, msg: "Wybierz słupek dla każdego krążka p₁ … p" + n + ", aby określić stan-podcel przed ruchem największego krążka #" + n + "." };
+    }
+    if (stateEq(givenTuple, task.subgoal)) {
+      return {
+        ok: true,
+        msg: "Doskonale! Stan <b>" + stateLabel(task.subgoal) + "</b> to wejście na most w trójkącie Sierpińskiego: " +
+             "mniejsze krążki (1.." + (n - 1) + ") są zebrane na słupku pomocniczym <b>" + PEGS[w] +
+             "</b>, dzięki czemu największy krążek <b>#" + n + "</b> może wykonać ruch <b>" + task.bridgeMoveLabel + "</b>!"
+      };
+    }
+    if (stateEq(givenTuple, task.bridgeOut)) {
+      return {
+        ok: false,
+        msg: "Bardzo blisko! Stan <b>" + stateLabel(task.bridgeOut) + "</b> to stan tuż <b>PO</b> przełożeniu krążka #" + n +
+             " na słupek " + PEGS[v] + " (wyjście z mostu). Wskaż stan-podcel tuż <b>PRZED</b> tym ruchem (gdy krążek #" + n +
+             " leży jeszcze na słupku <b>" + PEGS[u] + "</b>)."
+      };
+    }
+    if (givenTuple[n - 1] !== u) {
+      return {
+        ok: false,
+        msg: "W stanie-podcelu (tuż przed przejściem przez most) największy krążek <b>#" + n + "</b> (p" + n +
+             ") musi jeszcze leżeć na swoim początkowym słupku <b>" + PEGS[u] + "</b> (wybrano " + PEGS[givenTuple[n - 1]] + ")."
+      };
+    }
+    for (var d = 0; d < n - 1; d++) {
+      if (givenTuple[d] === u) {
+        return {
+          ok: false,
+          msg: "W stanie <b>" + stateLabel(givenTuple) + "</b> mniejszy krążek <b>#" + (d + 1) + "</b> nadal leży na słupku <b>" +
+               PEGS[u] + "</b> (na krążku #" + n + ") i blokuje jego podniesienie! Wszystkie mniejsze krążki muszą znaleźć się na słupku pomocniczym <b>" + PEGS[w] + "</b>."
+        };
+      }
+      if (givenTuple[d] === v) {
+        return {
+          ok: false,
+          msg: "W stanie <b>" + stateLabel(givenTuple) + "</b> mniejszy krążek <b>#" + (d + 1) + "</b> leży na słupku docelowym <b>" +
+               PEGS[v] + "</b> i nie pozwala odłożyć tam większego krążka <b>#" + n + "</b>! Mniejsze krążki muszą być na słupku pomocniczym <b>" + PEGS[w] + "</b>."
+        };
+      }
+    }
+    return {
+      ok: false,
+      msg: "Stan <b>" + stateLabel(givenTuple) + "</b> nie pozwala jeszcze wykonać ruchu <b>" + task.bridgeMoveLabel + "</b> krążkiem #" + n + "."
+    };
+  }
+
+  function checkTask3(task, finalState, historyMoves) {
+    var movesCount = historyMoves ? historyMoves.length : 0;
+    var opt = task.bfs.moves.length;
+    if (!stateEq(finalState, task.goal)) {
+      if (movesCount === 0) {
+        return { ok: false, msg: "Nie wykonano jeszcze żadnego ruchu na słupkach – przełóż krążki ze stanu START do stanu CEL." };
+      }
+      return {
+        ok: false,
+        msg: "Wieża na słupkach nie jest jeszcze w stanie docelowym CEL (wykonano " + nMoves(movesCount) + "). Dokończ układanie wieży!"
+      };
+    }
+    if (movesCount > opt) {
+      return {
+        ok: false,
+        msg: "Ułożono stan CEL, ale w <b>" + nMoves(movesCount) + "</b> – a najkrótsza ścieżka (BFS) liczy <b>" +
+             nMoves(opt) + "</b> (o " + nMoves(movesCount - opt) + " mniej)."
+      };
+    }
+    return {
+      ok: true,
+      msg: "Najkrótsza ścieżka – <b>" + nMoves(opt) + "</b>! Rozwiązałeś(aś) zadanie optymalnie, dokładnie tak jak algorytm <b>BFS</b> " +
+           "(podczas gdy DFS potrzebował aż <b>" + nMoves(task.dfs.moves.length) + "</b>)."
+    };
+  }
+
   // Generowanie wspolrzednych grafu przestrzeni stanow (dla wizualizacji SVG do 256 stanow)
   function buildGraphLayout(n, k) {
     var total = Math.pow(k, n);
@@ -661,7 +962,7 @@ var HN = (function () {
       for (var p = 0; p < k; p++) gen(prefix.concat([p]));
     })([]);
 
-    var rawPos = {}, i, d;
+    var rawPos = {}, d;
     if (k === 3) {
       var V = [[-1, 0], [0, -Math.sqrt(3)], [1, 0]];
       states.forEach(function (s) {
@@ -698,7 +999,7 @@ var HN = (function () {
     for (var key in rawPos) { xs.push(rawPos[key][0]); ys.push(rawPos[key][1]); }
     var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
     var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
-    var W = 380, H = 310, pad = 26;
+    var W = 380, H = 300, pad = 24;
     var spanX = (maxX - minX) || 1, spanY = (maxY - minY) || 1;
     var scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
     var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
@@ -729,10 +1030,11 @@ var HN = (function () {
   function nStates(k) { return k + " " + plural(k, "stan", "stany", "stanów"); }
 
   return {
-    PEGS: PEGS, COLORS: COLORS, stateKey: stateKey, stateLabel: stateLabel,
-    topDisks: topDisks, validMoves: validMoves, isGoal: isGoal,
-    runBFS: runBFS, runDFS: runDFS, buildGraphLayout: buildGraphLayout,
-    nMoves: nMoves, nStates: nStates, plural: plural
+    PEGS: PEGS, COLORS: COLORS, rng: rng, stateKey: stateKey, stateLabel: stateLabel, stateEq: stateEq,
+    topDisks: topDisks, allActionLabels: allActionLabels, validMoves: validMoves, isGoal: isGoal,
+    bfsDistances: bfsDistances, runBFS: runBFS, runDFS: runDFS, generateTask: generateTask,
+    checkTask1: checkTask1, checkTask2: checkTask2, checkTask3: checkTask3,
+    buildGraphLayout: buildGraphLayout, nMoves: nMoves, nStates: nStates, plural: plural
   };
 })();
 if (typeof module === "object" && module && module.exports && typeof window === "undefined") module.exports = HN;
@@ -752,51 +1054,130 @@ _HANOI_UI_JS = r"""
     return e;
   }
 
+  var RULES = {
+    exam: "📏 <b>Zasady (egzamin):</b> Dla wylosowanych stanów <b>START</b> i <b>CEL</b> rozwiąż 3 zadania: " +
+          "<b>(1)</b> zapisz stan START jako krotkę i wskaż wszystkie dozwolone w nim akcje, " +
+          "<b>(2)</b> wyznacz <b>stan-podcel</b> (wejście na „most” w trójkącie Sierpińskiego), który pozwala ruszyć największy krążek, " +
+          "<b>(3)</b> przełóż krążki ze START do CEL na słupkach w <b>minimalnej liczbie ruchów</b>.<br>" +
+          "🔒 Odpowiedzi <b>zatwierdzasz raz</b> – dopiero wtedy zobaczysz wynik (0–3 pkt), poprawne odpowiedzi oraz porównanie z <b>BFS</b> i <b>DFS</b>. Kolejna próba = <b>🎲 Nowe zadanie</b>.",
+    playground: "🔓 <b>Plac zabaw:</b> Możesz sprawdzać odpowiedzi (<b>✔ Sprawdź</b>) wielokrotnie, podejrzeć rozwiązanie (<b>👁 Pokaż rozwiązanie</b>), " +
+          "klikać węzły bezpośrednio na grafie Sierpińskiego, przełączyć układ na <b>klasyczny (A → C)</b> oraz w każdej chwili otworzyć <b>📊 Porównanie z BFS i DFS</b>."
+  };
+
   var S = {
+    mode: CFG.mode,
     n: CFG.n_disks,
-    k: CFG.n_pegs,
-    state: [],
-    selectedPeg: null,
-    history: [],        // [{from, to, disk, next, label}]
-    trailStates: [],    // [state0, state1, ...]
-    visitedSet: {},
-    bfs: null,
-    dfs: null,
+    k: 3,
+    seed: CFG.seed,
+    preset: "random",
+    task: null,
     layout: null,
+    // Odpowiedzi do 3 zadan:
+    ans1Tuple: [],
+    ans1Actions: [],
+    ans2Tuple: [],
+    // Stan gry na slupkach (Zadanie 3):
+    state: [],
+    animState: null,
+    selectedPeg: null,
+    history: [],
+    trailStates: [],
+    visitedSet: {},
+    // Wyniki sprawdzania i stan UI:
+    res: {},
+    reveal: false,
+    locked: false,
+    confirm: false,
     showCompare: false,
-    overlay: "user",    // "user" | "bfs" | "dfs" | "all"
+    overlay: "user",
     msg: "",
     msgKind: "info",
+    note: "",
     animTimer: null
   };
 
+  function exam() { return S.mode === "exam"; }
+  function randomSeed() { return Math.floor(Math.random() * 100000); }
+
   function stopAnim() {
     if (S.animTimer) { clearInterval(S.animTimer); S.animTimer = null; }
+    S.animState = null;
   }
 
-  function initGame() {
+  function newTask(seed) {
     stopAnim();
     S.n = parseInt($(".hn-disks").value, 10);
-    S.k = parseInt($(".hn-pegs").value, 10);
-    S.state = [];
-    for (var i = 0; i < S.n; i++) S.state.push(0);
+    S.preset = exam() ? "random" : $(".hn-preset").value;
+    S.seed = seed;
+    $(".hn-seed").value = seed;
+
+    S.task = HN.generateTask(S.n, S.k, S.seed, S.preset);
+    S.layout = HN.buildGraphLayout(S.n, S.k);
+
+    S.ans1Tuple = [];
+    S.ans2Tuple = [];
+    for (var i = 0; i < S.n; i++) { S.ans1Tuple.push(null); S.ans2Tuple.push(null); }
+    S.ans1Actions = [];
+
+    resetTowersToStart(true);
+
+    S.res = {};
+    S.reveal = false;
+    S.locked = false;
+    S.confirm = false;
+    S.showCompare = false;
+    S.overlay = "user";
+    S.note = "";
+    $(".hn-show").textContent = "👁 Pokaż rozwiązanie";
+    render();
+  }
+
+  function resetTowersToStart(silent) {
+    stopAnim();
+    S.state = S.task.start.slice();
     S.selectedPeg = null;
     S.history = [];
     S.trailStates = [S.state.slice()];
     S.visitedSet = {};
     S.visitedSet[HN.stateKey(S.state)] = true;
-    S.bfs = HN.runBFS(S.n, S.k);
-    S.dfs = HN.runDFS(S.n, S.k);
-    S.layout = HN.buildGraphLayout(S.n, S.k);
+    delete S.res.t3;
+    S.confirm = false;
+    if (!silent) {
+      S.msg = "Przywrócono wieżę do stanu początkowego START.";
+      S.msgKind = "info";
+      render();
+    } else {
+      S.msg = "Kliknij słupek na planszy poniżej, aby podnieść górny krążek, a następnie słupek docelowy (doprowadź wieżę ze START do CEL).";
+      S.msgKind = "info";
+    }
+  }
+
+  function setMode(m) {
+    if (S.mode === m) return;
+    stopAnim();
+    S.mode = m;
+    S.res = {};
+    S.note = "";
+    S.locked = false;
+    S.confirm = false;
+    S.reveal = false;
     S.showCompare = false;
-    S.overlay = "user";
-    S.msg = "Kliknij słupek, z którego chcesz podnieść górny krążek, a następnie słupek docelowy.";
-    S.msgKind = "info";
+    if (m === "exam") {
+      $(".hn-preset").value = "random";
+      newTask(randomSeed());
+      return;
+    }
     render();
   }
 
   function clickPeg(p) {
+    if (S.locked && !S.showCompare) {
+      S.note = "🔒 Odpowiedzi są już zatwierdzone. Kliknij 🎲 Nowe zadanie, aby spróbować ponownie.";
+      render();
+      return;
+    }
     stopAnim();
+    S.confirm = false;
     var top = HN.topDisks(S.state, S.k);
     if (S.selectedPeg === null) {
       if (top[p] < 0) {
@@ -829,7 +1210,6 @@ _HANOI_UI_JS = r"""
       return;
     }
 
-    // Wykonaj ruch u -> p
     var next = S.state.slice();
     next[du] = p;
     var mv = { from: u, to: p, disk: du + 1, next: next, label: HN.PEGS[u] + "→" + HN.PEGS[p] };
@@ -838,37 +1218,40 @@ _HANOI_UI_JS = r"""
     S.history.push(mv);
     S.trailStates.push(next.slice());
     S.visitedSet[HN.stateKey(next)] = true;
+    delete S.res.t3;
 
-    if (HN.isGoal(S.state, S.k)) {
-      S.showCompare = true;
-      S.overlay = "all";
-      var opt = S.bfs.moves.length;
-      var diff = S.history.length - opt;
-      if (diff === 0) {
-        S.msg = "🏆 <b>Brawo! Rozwiązano w minimalnej możliwej liczbie ruchów (" + HN.nMoves(opt) + ")!</b> Zobacz poniżej porównanie z BFS i DFS.";
+    if (HN.stateEq(S.state, S.task.goal)) {
+      if (!exam()) {
+        var opt = S.task.bfs.moves.length;
+        var diff = S.history.length - opt;
+        S.msg = diff === 0
+          ? "🏆 <b>Ułożono stan CEL w minimalnej liczbie ruchów (" + HN.nMoves(opt) + ")!</b> Kliknij <b>✔ Sprawdź</b>, aby ocenić wszystkie zadania."
+          : "🟡 <b>Ułożono stan CEL w " + HN.nMoves(S.history.length) + ".</b> (Najkrótsza ścieżka BFS ma " + HN.nMoves(opt) + ").";
       } else {
-        S.msg = "🎉 <b>Cel osiągnięty w " + HN.nMoves(S.history.length) + "!</b> Najkrótsza ścieżka (BFS) liczy <b>" + HN.nMoves(opt) + "</b> (o " + HN.nMoves(diff) + " mniej). Zobacz porównanie poniżej!";
+        S.msg = "🟡 <b>Ułożono stan docelowy CEL</b> (liczba wykonanych ruchów: <b>" + S.history.length + "</b>). Gdy ukończysz wszystkie 3 zadania, kliknij <b>🔒 Zatwierdź odpowiedzi</b>.";
       }
       S.msgKind = "ok";
-    } else if (S.k === 2) {
-      S.showCompare = true;
-      S.msg = "🤔 Przełożono krążek #1 na słupek B, ale większego krążka #2 nie da się ruszyć! Przy <b>2 słupkach</b> stan docelowy jest <b>nieosiągalny</b> (zobacz analizę BFS/DFS poniżej).";
-      S.msgKind = "warn";
+    } else if (HN.stateEq(S.state, S.task.subgoal)) {
+      S.msg = "🎯 Wykonano ruch: krążek <b>#" + (du + 1) + "</b> (<b>" + mv.label + "</b>). Dotarłeś(aś) do stanu-podcelu – największy krążek <b>#" + S.n + "</b> ma teraz wolną drogę!";
+      S.msgKind = "info";
     } else {
-      S.msg = "Wykonano ruch: krążek <b>#" + (du + 1) + "</b>: <b>" + mv.label + "</b> (stan: <code>" + HN.stateLabel(S.state) + "</code>).";
+      S.msg = "Wykonano ruch: krążek <b>#" + (du + 1) + "</b> (<b>" + mv.label + "</b>). Łącznie ruchów: <b>" + S.history.length + "</b>.";
       S.msgKind = "info";
     }
     render();
   }
 
   function undoMove() {
+    if (S.locked && !S.showCompare) return;
     stopAnim();
     if (!S.history.length) return;
     S.history.pop();
     S.trailStates.pop();
     S.state = S.trailStates[S.trailStates.length - 1].slice();
     S.selectedPeg = null;
-    S.msg = "Cofnięto ostatni ruch. Bieżący stan: <code>" + HN.stateLabel(S.state) + "</code>.";
+    delete S.res.t3;
+    S.confirm = false;
+    S.msg = "Cofnięto ostatni ruch (pozostało ruchów: " + S.history.length + ").";
     S.msgKind = "info";
     render();
   }
@@ -880,8 +1263,8 @@ _HANOI_UI_JS = r"""
     S.showCompare = true;
     S.selectedPeg = null;
     var idx = 0;
-    S.state = states[0].slice();
-    S.msg = "▶️ Odtwarzanie (" + label + "): start <code>" + HN.stateLabel(S.state) + "</code> (0 / " + moves.length + ")";
+    S.animState = states[0].slice();
+    S.msg = "▶️ Odtwarzanie (" + label + "): start <code>" + HN.stateLabel(S.animState) + "</code> (0 / " + moves.length + ")";
     S.msgKind = "info";
     render();
 
@@ -889,45 +1272,80 @@ _HANOI_UI_JS = r"""
       if (!document.body.contains(root)) { stopAnim(); return; }
       idx++;
       if (idx >= states.length) {
-        stopAnim();
-        S.msg = "✅ Zakończono odtwarzanie: <b>" + label + "</b> (" + HN.nMoves(moves.length) + ").";
+        if (S.animTimer) { clearInterval(S.animTimer); S.animTimer = null; }
+        S.animState = null;
+        S.msg = "✅ Zakończono odtwarzanie: <b>" + label + "</b> (" + HN.nMoves(moves.length) + "). Przywrócono widok Twojej wieży.";
         S.msgKind = "ok";
         render();
         return;
       }
-      S.state = states[idx].slice();
+      S.animState = states[idx].slice();
       var mv = moves[idx - 1];
-      S.msg = "▶️ Odtwarzanie (" + label + ") – krok " + idx + " / " + moves.length + ": krążek <b>#" + mv.disk + "</b> (" + mv.label + ")";
+      S.msg = "▶️ Odtwarzanie (" + label + ") – krok " + idx + " / " + moves.length + ": krążek <b>#" + mv.disk + "</b> (" + mv.label + ") → <code>" + HN.stateLabel(S.animState) + "</code>";
       render();
-    }, moves.length > 25 ? 240 : 520);
+    }, moves.length > 25 ? 260 : 540);
+  }
+
+  // Rysowanie miniaturowego podgladu stanu (dla START i CEL)
+  function drawMiniState(svg, state, accentColor) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var W = 230, H = 112, baseY = 88, pegTopY = 20;
+    var n = S.n, k = S.k, spacing = (W - 24) / k;
+
+    el("rect", { x: 10, y: baseY, width: W - 20, height: 7, rx: 3, fill: "#dee2e6", stroke: "#495057", "stroke-width": 1.2 }, svg);
+    var pegs = [];
+    for (var p = 0; p < k; p++) pegs.push([]);
+    for (var d = n - 1; d >= 0; d--) pegs[state[d]].push(d);
+
+    var maxW = Math.min(58, spacing * 0.84);
+    var minW = Math.max(20, maxW * 0.38);
+    var diskH = Math.min(14, Math.floor((baseY - pegTopY - 8) / n));
+
+    for (var p2 = 0; p2 < k; p2++) {
+      var px = 12 + spacing * (p2 + 0.5);
+      el("rect", { x: px - 2.5, y: pegTopY, width: 5, height: baseY - pegTopY, rx: 2, fill: "#868e96", stroke: "#343a40", "stroke-width": 0.8 }, svg);
+      el("text", { x: px, y: baseY + 18, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: accentColor || "#212529" }, svg, HN.PEGS[p2]);
+      var stack = pegs[p2];
+      for (var idx = 0; idx < stack.length; idx++) {
+        var diskIdx = stack[idx];
+        var w = n === 1 ? maxW : minW + (maxW - minW) * (diskIdx / (n - 1));
+        var y = baseY - (idx + 1) * diskH - 1;
+        var col = HN.COLORS[diskIdx % HN.COLORS.length];
+        el("rect", { x: px - w / 2, y: y, width: w, height: diskH - 1.5, rx: 3.5, fill: col, stroke: "#212529", "stroke-width": 0.9 }, svg);
+        el("text", { x: px, y: y + (diskH - 1.5) / 2 + 3.5, "text-anchor": "middle", "font-size": 9.5, "font-weight": 700, fill: "#fff" }, svg, String(diskIdx + 1));
+      }
+    }
   }
 
   function drawTowers() {
     var svg = $(".hn-towers-svg");
     while (svg.firstChild) svg.removeChild(svg.firstChild);
-    var W = 540, H = 290;
-    var baseY = 238, pegTopY = 58;
+    var W = 520, H = 240;
+    var baseY = 196, pegTopY = 44;
     var n = S.n, k = S.k;
-    var spacing = (W - 60) / k;
-    var top = HN.topDisks(S.state, k);
+    var spacing = (W - 50) / k;
+    var curState = S.animState || S.state;
+    var top = HN.topDisks(curState, k);
+    var showHints = !exam() || S.locked;
 
-    // Podstawa
-    el("rect", { x: 20, y: baseY, width: W - 40, height: 14, rx: 5, fill: "#dee2e6", stroke: "#495057", "stroke-width": 1.8 }, svg);
+    el("rect", { x: 18, y: baseY, width: W - 36, height: 12, rx: 5, fill: "#dee2e6", stroke: "#495057", "stroke-width": 1.6 }, svg);
 
-    // Zbierz krazki na kazdym slupku (od najwiekszego na dole do najmniejszego na gorze)
-    var pegs = [];
-    for (var p = 0; p < k; p++) pegs.push([]);
-    for (var d = n - 1; d >= 0; d--) pegs[S.state[d]].push(d);
+    var pegs = [], goalPegs = [];
+    for (var p = 0; p < k; p++) { pegs.push([]); goalPegs.push([]); }
+    for (var d = n - 1; d >= 0; d--) {
+      pegs[curState[d]].push(d);
+      goalPegs[S.task.goal[d]].push(d);
+    }
 
-    var maxDiskW = Math.min(130, spacing * 0.84);
-    var minDiskW = Math.max(34, maxDiskW * 0.34);
-    var diskH = Math.min(24, Math.floor((baseY - pegTopY - 22) / n));
+    var maxDiskW = Math.min(124, spacing * 0.84);
+    var minDiskW = Math.max(34, maxDiskW * 0.35);
+    var diskH = Math.min(22, Math.floor((baseY - pegTopY - 18) / n));
 
     for (var p2 = 0; p2 < k; p2++) (function (p) {
-      var px = 30 + spacing * (p + 0.5);
-      var isSel = S.selectedPeg === p;
+      var px = 25 + spacing * (p + 0.5);
+      var isSel = S.selectedPeg === p && !S.animState;
       var canDrop = false;
-      if (S.selectedPeg !== null && S.selectedPeg !== p) {
+      if (S.selectedPeg !== null && S.selectedPeg !== p && !S.animState) {
         var du = top[S.selectedPeg];
         canDrop = (top[p] < 0 || du < top[p]);
       }
@@ -935,38 +1353,46 @@ _HANOI_UI_JS = r"""
       var grp = el("g", { "class": "hn-peg-grp" }, svg);
       grp.addEventListener("click", function () { clickPeg(p); });
 
-      // Tlo klikalnego obszaru slupka
-      var bgFill = isSel ? "#fff9db" : (canDrop ? "#ebfbee" : "transparent");
-      var bgStroke = isSel ? "#f08c00" : (canDrop ? "#2f9e44" : "none");
+      var bgFill = isSel ? "#fff9db" : (showHints && canDrop ? "#ebfbee" : "transparent");
+      var bgStroke = isSel ? "#f08c00" : (showHints && canDrop ? "#2f9e44" : "none");
       el("rect", {
-        x: px - spacing * 0.46, y: 18, width: spacing * 0.92, height: baseY + 34,
-        rx: 8, fill: bgFill, stroke: bgStroke, "stroke-width": 2, "stroke-dasharray": canDrop ? "5 4" : "none"
+        x: px - spacing * 0.46, y: 12, width: spacing * 0.92, height: baseY + 26,
+        rx: 8, fill: bgFill, stroke: bgStroke, "stroke-width": 2, "stroke-dasharray": (showHints && canDrop) ? "5 4" : "none"
       }, grp);
 
-      // Slupek
       el("rect", {
         x: px - 5, y: pegTopY, width: 10, height: baseY - pegTopY, rx: 4,
         fill: isSel ? "#f08c00" : "#868e96", stroke: "#343a40", "stroke-width": 1.2
       }, grp);
 
-      // Etykieta slupka (A, B, C...)
-      var lblTxt = HN.PEGS[p] + (p === 0 ? " (START)" : (p === k - 1 ? " (CEL)" : ""));
       el("text", {
-        x: px, y: baseY + 32, "text-anchor": "middle", "font-size": 13, "font-weight": 700,
-        fill: p === 0 ? "#2f9e44" : (p === k - 1 ? "#b08900" : "#212529")
-      }, grp, lblTxt);
+        x: px, y: baseY + 26, "text-anchor": "middle", "font-size": 13, "font-weight": 700, fill: "#212529"
+      }, grp, "Słupek " + HN.PEGS[p]);
 
-      if (canDrop) {
-        el("text", { x: px, y: 36, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#2f9e44" }, grp, "⬇ połóż tutaj");
+      if (showHints && canDrop) {
+        el("text", { x: px, y: 28, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#2f9e44" }, grp, "⬇ połóż tutaj");
       }
 
-      // Krazki na slupku
+      // Delikatne kontury docelowego ukladu CEL (duchy krazkow)
+      var gStack = goalPegs[p];
+      for (var gIdx = 0; gIdx < gStack.length; gIdx++) {
+        var gd = gStack[gIdx];
+        var gw = n === 1 ? maxDiskW : minDiskW + (maxDiskW - minDiskW) * (gd / (n - 1));
+        var gy = baseY - (gIdx + 1) * diskH - 2;
+        el("rect", {
+          x: px - gw / 2, y: gy, width: gw, height: diskH - 2, rx: 6,
+          fill: "none", stroke: HN.COLORS[gd % HN.COLORS.length], "stroke-width": 1.2,
+          "stroke-dasharray": "3 3", "stroke-opacity": 0.45
+        }, grp);
+      }
+
+      // Aktualne krazki na slupku
       var stack = pegs[p];
       for (var idx = 0; idx < stack.length; idx++) {
         var diskIdx = stack[idx];
         var w = n === 1 ? maxDiskW : minDiskW + (maxDiskW - minDiskW) * (diskIdx / (n - 1));
         var isLifted = isSel && idx === stack.length - 1;
-        var y = isLifted ? (pegTopY - diskH - 8) : (baseY - (idx + 1) * diskH - 2);
+        var y = isLifted ? (pegTopY - diskH - 6) : (baseY - (idx + 1) * diskH - 2);
         var col = HN.COLORS[diskIdx % HN.COLORS.length];
 
         el("rect", {
@@ -975,8 +1401,8 @@ _HANOI_UI_JS = r"""
         }, grp);
         el("text", {
           x: px, y: y + (diskH - 2) / 2 + 4, "text-anchor": "middle",
-          "font-size": 12, "font-weight": 700, fill: "#ffffff"
-        }, grp, String(diskIdx + 1));
+          "font-size": 11.5, "font-weight": 700, fill: "#ffffff"
+        }, grp, "#" + (diskIdx + 1));
       }
     })(p2);
   }
@@ -1004,29 +1430,22 @@ _HANOI_UI_JS = r"""
       return m;
     }
 
+    var canSeeBfsDfs = !exam() || S.locked;
     var userEdges = buildEdgeMap(S.trailStates);
-    var bfsEdges = buildEdgeMap(S.bfs.states);
-    var dfsEdges = buildEdgeMap(S.dfs.states);
+    var bfsEdges = buildEdgeMap(S.task.bfs.states);
+    var dfsEdges = buildEdgeMap(S.task.dfs.states);
+    var bridgeKey = eKey(HN.stateKey(S.task.subgoal), HN.stateKey(S.task.bridgeOut));
+    var showBridgeSolution = (exam() ? S.locked : (S.reveal || (S.res.t2 && S.res.t2.ok)));
 
-    // Krawedzie tla
     L.edges.forEach(function (e) {
       var p1 = L.pos[e[0]], p2 = L.pos[e[1]], ek = eKey(e[0], e[1]);
-      el("line", {
-        x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1],
-        stroke: "#dee2e6", "stroke-width": 1.6
-      }, svg);
+      el("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#dee2e6", "stroke-width": 1.6 }, svg);
 
-      if ((S.overlay === "dfs" || S.overlay === "all") && dfsEdges[ek]) {
-        el("line", {
-          x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1],
-          stroke: "#9c36b5", "stroke-width": 3.0, "stroke-opacity": 0.65
-        }, svg);
+      if (canSeeBfsDfs && (S.overlay === "dfs" || S.overlay === "all") && dfsEdges[ek]) {
+        el("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#9c36b5", "stroke-width": 3.0, "stroke-opacity": 0.65 }, svg);
       }
-      if ((S.overlay === "bfs" || S.overlay === "all") && bfsEdges[ek]) {
-        el("line", {
-          x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1],
-          stroke: "#1971c2", "stroke-width": 3.8, "stroke-opacity": 0.9
-        }, svg);
+      if (canSeeBfsDfs && (S.overlay === "bfs" || S.overlay === "all") && bfsEdges[ek]) {
+        el("line", { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#1971c2", "stroke-width": 3.8, "stroke-opacity": 0.9 }, svg);
       }
       if ((S.overlay === "user" || S.overlay === "all") && userEdges[ek]) {
         el("line", {
@@ -1034,286 +1453,647 @@ _HANOI_UI_JS = r"""
           stroke: "#f08c00", "stroke-width": 2.8, "stroke-dasharray": S.overlay === "all" ? "4 3" : "none"
         }, svg);
       }
+      if (showBridgeSolution && ek === bridgeKey) {
+        el("line", {
+          x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1],
+          stroke: "#e8590c", "stroke-width": 4.5, "stroke-opacity": 0.95
+        }, svg);
+      }
     });
 
-    // Wezly
-    var curKey = HN.stateKey(S.state);
-    var startKey = HN.stateKey(S.trailStates[0]);
-    var goalArr = [];
-    for (var i = 0; i < S.n; i++) goalArr.push(S.k - 1);
-    var goalKey = HN.stateKey(goalArr);
-    var r = L.states.length <= 27 ? 6.5 : (L.states.length <= 81 ? 4.5 : 3.2);
+    var curState = S.animState || S.state;
+    var curKey = HN.stateKey(curState);
+    var startKey = HN.stateKey(S.task.start);
+    var goalKey = HN.stateKey(S.task.goal);
+    var userSubgoalComplete = S.ans2Tuple.every(function (p) { return p !== null && p >= 0; });
+    var userSubKey = userSubgoalComplete ? HN.stateKey(S.ans2Tuple) : null;
+    var trueSubKey = HN.stateKey(S.task.subgoal);
+    var r = L.states.length <= 27 ? 6.5 : 4.6;
+    var showNodeTuples = !exam() || S.locked || (S.res.t1 && S.res.t1.ok);
 
     L.states.forEach(function (st) {
       var sk = HN.stateKey(st), p = L.pos[sk];
       var isCur = sk === curKey, isStart = sk === startKey, isGoal = sk === goalKey;
+      var isUserSub = sk === userSubKey;
+      var isTrueSub = showBridgeSolution && sk === trueSubKey;
+
+      var grp = el("g", { "class": "hn-gnode" }, svg);
+      if (!exam()) {
+        grp.style.cursor = "pointer";
+        grp.addEventListener("click", function () {
+          if (S.locked) return;
+          S.ans2Tuple = st.slice();
+          delete S.res.t2;
+          S.note = "🎯 Wybrano węzeł " + HN.stateLabel(st) + " z grafu jako stan-podcel w Zadaniu 2.";
+          render();
+        });
+      }
+
+      if (isUserSub || isTrueSub) {
+        el("circle", {
+          cx: p[0], cy: p[1], r: r + 5.2,
+          fill: "none", stroke: isTrueSub ? "#2b8a3e" : "#e8590c",
+          "stroke-width": 2.4, "stroke-dasharray": isTrueSub ? "none" : "3 2"
+        }, grp);
+      }
+
       var fill = isCur ? "#e03131" : (isGoal ? "#ffe066" : (isStart ? "#2f9e44" : (S.visitedSet[sk] ? "#ffd8a8" : "#ffffff")));
       var stroke = isCur ? "#c92a2a" : (isStart ? "#2f9e44" : (isGoal ? "#e67700" : "#868e96"));
       var c = el("circle", {
-        cx: p[0], cy: p[1], r: isCur ? r + 2.2 : r,
+        cx: p[0], cy: p[1], r: isCur ? r + 2.0 : r,
         fill: fill, stroke: stroke, "stroke-width": isCur || isStart || isGoal ? 2.2 : 1.1
-      }, svg);
-      el("title", {}, c, HN.stateLabel(st));
+      }, grp);
+
+      var tip = isStart ? "START" : (isGoal ? "CEL" : "Stan");
+      if (showNodeTuples) tip += ": " + HN.stateLabel(st);
+      el("title", {}, c, tip);
     });
+  }
+
+  function buildTupleControls(tupleArr, prefixClass, onSelect) {
+    var html = "<div class='hn-tuple-box'><span class='hn-paren'>(</span>";
+    for (var i = 0; i < S.n; i++) {
+      var col = HN.COLORS[i % HN.COLORS.length];
+      var val = tupleArr[i];
+      html += "<div class='hn-titem'>" +
+        "<span class='hn-tdisk' style='background:" + col + "'>p<sub>" + (i + 1) + "</sub> (#" + (i + 1) + ")</span>" +
+        "<div class='hn-tbtns'>";
+      for (var p = 0; p < S.k; p++) {
+        var active = val === p ? " hn-tbtn-on" : "";
+        html += "<button type='button' class='hn-tbtn " + prefixClass + active + "' data-disk='" + i + "' data-peg='" + p + "'" +
+          (S.locked ? " disabled" : "") + ">" + HN.PEGS[p] + "</button>";
+      }
+      html += "</div></div>";
+      if (i + 1 < S.n) html += "<span class='hn-comma'>,</span>";
+    }
+    html += "<span class='hn-paren'>)</span></div>";
+    return html;
+  }
+
+  function renderTasks() {
+    var box = $(".hn-tasks");
+    box.innerHTML = "";
+    var T = S.task;
+    var showSol = function (id) {
+      return exam() ? (S.locked && S.res[id] && !S.res[id].ok) : S.reveal;
+    };
+
+    // ---- ZADANIE 1: Formalizacja stanu START i dozwolone akcje ----
+    var r1 = S.res.t1;
+    var card1 = document.createElement("div");
+    card1.className = "hn-tcard" + (r1 ? (r1.ok ? " hn-tok" : " hn-tbad") : "");
+    card1.style.setProperty("--c", "#1971c2");
+
+    var allActs = HN.allActionLabels(S.k);
+    var actButtonsHtml = allActs.map(function (a) {
+      var on = S.ans1Actions.indexOf(a.label) >= 0 ? " hn-act-on" : "";
+      return "<button type='button' class='hn-act-btn" + on + "' data-act='" + a.label + "'" +
+        (S.locked ? " disabled" : "") + ">" + a.label + "</button>";
+    }).join("");
+
+    var sol1 = showSol("t1")
+      ? "<div class='hn-sol'>Poprawna odpowiedź: <b>s<sub>0</sub> = " + HN.stateLabel(T.start) +
+        "</b> &nbsp;·&nbsp; Dozwolone akcje: <b>" + T.validStartActions.join(", ") + "</b></div>"
+      : "";
+
+    card1.innerHTML =
+      "<div class='hn-thead'><b>1. Formalizacja stanu początkowego START (Lab 2)</b>" +
+        (S.locked ? "<span class='hn-tactions'>🔒</span>" : "<span class='hn-tactions'><button type='button' class='hn-clr1' title='Wyczyść zadanie 1'>✕</button></span>") +
+      "</div>" +
+      "<div class='hn-tdesc'><b>1a.</b> Zapisz stan <b>START</b> (zielona ramka po lewej) jako krotkę <code>(p₁, …, p" + S.n + ")</code>, " +
+      "gdzie <code>p₁</code> to słupek najmniejszego krążka <b>#1</b>, a <code>p" + S.n + "</code> – największego <b>#" + S.n + "</b>:</div>" +
+      buildTupleControls(S.ans1Tuple, "hn-t1-btn") +
+      "<div class='hn-tdesc' style='margin-top:8px'><b>1b.</b> Zaznacz <b>wszystkie</b> akcje (reguły <code>X→Y</code>), które są <b>dozwolone (stosowalne)</b> w stanie <b>START</b>:</div>" +
+      "<div class='hn-act-row'>" + actButtonsHtml + "</div>" +
+      (r1 ? "<div class='hn-tres'><span class='hn-face'>" + (r1.ok ? "😀" : "😢") + "</span><span>" + r1.msg + "</span></div>" : "") +
+      sol1;
+
+    card1.querySelectorAll(".hn-t1-btn").forEach(function (b) {
+      b.addEventListener("click", function () {
+        if (S.locked) return;
+        var d = parseInt(b.getAttribute("data-disk"), 10);
+        var p = parseInt(b.getAttribute("data-peg"), 10);
+        S.ans1Tuple[d] = p;
+        delete S.res.t1;
+        S.confirm = false;
+        render();
+      });
+    });
+    card1.querySelectorAll(".hn-act-btn").forEach(function (b) {
+      b.addEventListener("click", function () {
+        if (S.locked) return;
+        var act = b.getAttribute("data-act");
+        var idx = S.ans1Actions.indexOf(act);
+        if (idx >= 0) S.ans1Actions.splice(idx, 1);
+        else S.ans1Actions.push(act);
+        delete S.res.t1;
+        S.confirm = false;
+        render();
+      });
+    });
+    var clr1 = card1.querySelector(".hn-clr1");
+    if (clr1) clr1.addEventListener("click", function () {
+      for (var i = 0; i < S.n; i++) S.ans1Tuple[i] = null;
+      S.ans1Actions = [];
+      delete S.res.t1;
+      S.confirm = false;
+      render();
+    });
+    box.appendChild(card1);
+
+    // ---- ZADANIE 2: Podcel / Most w trojkacie Sierpinskiego (Newell & Simon) ----
+    var r2 = S.res.t2;
+    var card2 = document.createElement("div");
+    card2.className = "hn-tcard" + (r2 ? (r2.ok ? " hn-tok" : " hn-tbad") : "");
+    card2.style.setProperty("--c", "#e8590c");
+
+    var sol2 = showSol("t2")
+      ? "<div class='hn-sol'>Poprawny stan-podcel (wejście na most): <b>" + HN.stateLabel(T.subgoal) +
+        "</b> (mniejsze krążki 1.." + (S.n - 1) + " na słupku pomocniczym <b>" + HN.PEGS[T.auxPeg] +
+        "</b>, największy krążek #" + S.n + " na <b>" + HN.PEGS[T.fromPeg] + "</b> gotowy do ruchu <b>" + T.bridgeMoveLabel + "</b>).</div>"
+      : "";
+
+    card2.innerHTML =
+      "<div class='hn-thead'><b>2. Analiza środków i celów: podcel / most w grafie (Newell i Simon)</b>" +
+        (S.locked ? "<span class='hn-tactions'>🔒</span>" : "<span class='hn-tactions'><button type='button' class='hn-clr2' title='Wyczyść zadanie 2'>✕</button></span>") +
+      "</div>" +
+      "<div class='hn-tdesc'>Aby największy krążek <b>#" + S.n + "</b> mógł przejść ze swojego słupka ze stanu START na docelowy słupek ze stanu CEL, " +
+      "musisz najpierw osiągnąć <b>stan-podcel</b> (wejście na „most” między podtrójkątami Sierpińskiego), z którego ten ruch krążkiem <b>#" + S.n + "</b> będzie dozwolony.<br>" +
+      "Wskaż ten <b>stan-podcel</b> tuż <i>przed</i> ruchem krążka <b>#" + S.n + "</b>" +
+      (!exam() ? " (wybierz słupki poniżej lub kliknij węzeł na grafie):" : ":") + "</div>" +
+      buildTupleControls(S.ans2Tuple, "hn-t2-btn") +
+      (r2 ? "<div class='hn-tres'><span class='hn-face'>" + (r2.ok ? "😀" : "😢") + "</span><span>" + r2.msg + "</span></div>" : "") +
+      sol2;
+
+    card2.querySelectorAll(".hn-t2-btn").forEach(function (b) {
+      b.addEventListener("click", function () {
+        if (S.locked) return;
+        var d = parseInt(b.getAttribute("data-disk"), 10);
+        var p = parseInt(b.getAttribute("data-peg"), 10);
+        S.ans2Tuple[d] = p;
+        delete S.res.t2;
+        S.confirm = false;
+        render();
+      });
+    });
+    var clr2 = card2.querySelector(".hn-clr2");
+    if (clr2) clr2.addEventListener("click", function () {
+      for (var i = 0; i < S.n; i++) S.ans2Tuple[i] = null;
+      delete S.res.t2;
+      S.confirm = false;
+      render();
+    });
+    box.appendChild(card2);
+
+    // ---- ZADANIE 3: Najkrotsza sciezka START -> CEL na slupkach ----
+    var r3 = S.res.t3;
+    var card3 = document.createElement("div");
+    card3.className = "hn-tcard" + (r3 ? (r3.ok ? " hn-tok" : " hn-tbad") : "");
+    card3.style.setProperty("--c", "#2f9e44");
+
+    var atGoal = HN.stateEq(S.state, T.goal);
+    var statusBadge = atGoal
+      ? "<span class='hn-badge hn-badge-ok'>🟡 Ułożono CEL (" + HN.nMoves(S.history.length) + ")</span>"
+      : "<span class='hn-badge hn-badge-prog'>W trakcie (" + HN.nMoves(S.history.length) + ")</span>";
+
+    var movesChips = S.history.length
+      ? S.history.map(function (m, idx) {
+          var col = HN.COLORS[(m.disk - 1) % HN.COLORS.length];
+          return "<span class='hn-chip' style='border-color:" + col + "'>" + (idx + 1) + ". " + m.label + " <small>(#" + m.disk + ")</small></span>";
+        }).join(" ")
+      : "<span class='hn-ph'>klikaj słupki na interaktywnej planszy po lewej, aby przekładać krążki…</span>";
+
+    var sol3 = showSol("t3")
+      ? "<div class='hn-sol'>Najkrótsza ścieżka (BFS – <b>" + HN.nMoves(T.bfs.moves.length) + "</b>): <b>" +
+        T.bfs.moves.map(function (m) { return m.label + " (#" + m.disk + ")"; }).join(" → ") + "</b></div>"
+      : "";
+
+    card3.innerHTML =
+      "<div class='hn-thead'><b>3. Najkrótsza ścieżka START → CEL (Lab 3 & 4)</b>" + statusBadge +
+        (S.locked ? "<span class='hn-tactions'>🔒</span>" :
+         "<span class='hn-tactions'><button type='button' class='hn-undo3' title='Cofnij ostatni ruch'>⌫</button><button type='button' class='hn-clr3' title='Resetuj wieżę do START'>✕</button></span>") +
+      "</div>" +
+      "<div class='hn-tdesc'>Przełóż krążki na interaktywnej planszy po lewej ze stanu <b>START</b> do stanu <b>CEL</b> w <b>minimalnej możliwej liczbie ruchów</b> (takiej, jaką znajduje algorytm <b>BFS</b>)." +
+      (!exam() ? " Najkrótsza droga liczy <b>" + HN.nMoves(T.bfs.moves.length) + "</b>." : "") + "</div>" +
+      "<div class='hn-seq-box'>" + movesChips + "</div>" +
+      (r3 ? "<div class='hn-tres'><span class='hn-face'>" + (r3.ok ? "😀" : "😢") + "</span><span>" + r3.msg + "</span></div>" : "") +
+      sol3;
+
+    var u3 = card3.querySelector(".hn-undo3");
+    if (u3) u3.addEventListener("click", undoMove);
+    var c3 = card3.querySelector(".hn-clr3");
+    if (c3) c3.addEventListener("click", function () { resetTowersToStart(false); });
+    box.appendChild(card3);
   }
 
   function renderComparison() {
     var box = $(".hn-compare");
-    if (!S.showCompare) {
+    var canShow = S.showCompare || S.reveal || (exam() && S.locked);
+    if (!canShow) {
       box.style.display = "none";
       return;
     }
     box.style.display = "";
+    var T = S.task;
     var totalStates = Math.pow(S.k, S.n);
-    var solvedByUser = HN.isGoal(S.state, S.k);
+    var solvedByUser = HN.stateEq(S.state, T.goal);
     var userMoves = S.history.length;
     var userUnique = Object.keys(S.visitedSet).length;
-
-    var bfsMoves = S.bfs.solved ? S.bfs.moves.length : null;
-    var dfsMoves = S.dfs.solved ? S.dfs.moves.length : null;
+    var bfsMoves = T.bfs.moves.length;
+    var dfsMoves = T.dfs.moves.length;
 
     var badge = "";
-    if (!S.bfs.solved) {
-      badge = "<div class='hn-verdict hn-v-warn'>⚠️ <b>Analiza przestrzeni stanów (k = 2 słupki):</b> Przestrzeń liczy <b>" +
-        totalStates + " stanów</b>, ale ze stanu początkowego osiągalne są tylko <b>2 stany</b>! " +
-        "Zarówno <b>BFS</b>, jak i <b>DFS</b> po odwiedzeniu 2 stanów opróżniają kolejkę/stos i udowadniają, że rozwiązanie nie istnieje.</div>";
+    if (solvedByUser && userMoves === bfsMoves) {
+      badge = "<div class='hn-verdict hn-v-ok'>🏆 <b>Optymalna ścieżka!</b> Twoja ścieżka ma <b>" + HN.nMoves(userMoves) +
+        "</b> – dokładnie tyle samo co najkrótsza ścieżka <b>BFS</b> (podczas gdy <b>DFS</b> błądził po grafie przez <b>" +
+        HN.nMoves(dfsMoves) + "</b>).</div>";
     } else if (solvedByUser) {
-      var extra = userMoves - bfsMoves;
-      if (extra === 0) {
-        badge = "<div class='hn-verdict hn-v-ok'>🏆 <b>Perfekcyjny wynik!</b> Rozwiązałeś(aś) łamigłówkę w <b>" +
-          HN.nMoves(userMoves) + "</b> – to dokładnie <b>najkrótsza możliwa ścieżka</b> (taka sama jak w BFS), " +
-          "podczas gdy DFS potrzebował aż <b>" + HN.nMoves(dfsMoves) + "</b>!</div>";
-      } else {
-        badge = "<div class='hn-verdict hn-v-info'>🎉 <b>Zagadka rozwiązana w " + HN.nMoves(userMoves) + "!</b> " +
-          "Najkrótsza ścieżka znaleziona przez <b>BFS</b> ma <b>" + HN.nMoves(bfsMoves) + "</b> (Twoja ścieżka miała o " +
-          HN.nMoves(extra) + " więcej). Zauważ jednak, że <b>DFS</b> błądził znacznie dłużej i potrzebował aż <b>" +
-          HN.nMoves(dfsMoves) + "</b>!</div>";
-      }
+      badge = "<div class='hn-verdict hn-v-info'>📊 Ułożyłeś(aś) stan CEL w <b>" + HN.nMoves(userMoves) +
+        "</b>. Najkrótsza ścieżka (<b>BFS</b>) ma <b>" + HN.nMoves(bfsMoves) + "</b>, natomiast <b>DFS</b> potrzebował aż <b>" +
+        HN.nMoves(dfsMoves) + "</b>.</div>";
     } else {
-      badge = "<div class='hn-verdict hn-v-info'>📊 <b>Podgląd porównania (przed ukończeniem):</b> " +
-        "Dotychczas wykonałeś(aś) <b>" + HN.nMoves(userMoves) + "</b>. Najkrótsza droga (BFS) wymaga <b>" +
-        HN.nMoves(bfsMoves) + "</b>, a ścieżka DFS liczy <b>" + HN.nMoves(dfsMoves) + "</b>.</div>";
+      badge = "<div class='hn-verdict hn-v-info'>📊 <b>Porównanie algorytmów BFS i DFS dla zadania START " +
+        HN.stateLabel(T.start) + " → CEL " + HN.stateLabel(T.goal) + ":</b> Najkrótsza droga (BFS) przechodzi przez most <b>" +
+        HN.stateLabel(T.subgoal) + " → " + HN.stateLabel(T.bridgeOut) + "</b> i liczy <b>" + HN.nMoves(bfsMoves) + "</b>.</div>";
     }
 
     function seqHtml(moves, cap) {
-      if (!moves || !moves.length) return "<span style='color:#868e96'>— (brak ścieżki)</span>";
+      if (!moves || !moves.length) return "<span style='color:#868e96'>—</span>";
       var shown = moves.slice(0, cap || 35).map(function (m) {
         return "<span class='hn-chip' style='border-color:" + HN.COLORS[(m.disk - 1) % HN.COLORS.length] + "'>" +
-          m.label + " <small>(kr." + m.disk + ")</small></span>";
+          m.label + " <small>(#" + m.disk + ")</small></span>";
       }).join(" → ");
-      if (moves.length > (cap || 35)) shown += " … <i>(+ " + (moves.length - (cap || 35)) + " kolejnych)</i>";
+      if (moves.length > (cap || 35)) shown += " … <i>(+" + (moves.length - (cap || 35)) + ")</i>";
       return shown;
     }
 
     box.innerHTML =
-      "<h5>📊 Porównanie: Twoje rozwiązanie vs BFS (najkrótsza ścieżka) vs DFS</h5>" +
+      "<h5>📊 Porównanie: Twoja ścieżka vs BFS (najkrótsza ścieżka) vs DFS</h5>" +
       badge +
       "<table class='hn-tbl'>" +
-      "<tr><th>Podejście</th><th>Liczba ruchów (długość ścieżki)</th><th>Odwiedzone stany w grafie (z " + totalStates + ")</th><th>Różnica względem najkrótszej ścieżki</th><th>Akcja</th></tr>" +
+      "<tr><th>Podejście</th><th>Długość ścieżki (ruchy)</th><th>Odwiedzone stany (z " + totalStates + ")</th><th>Różnica względem optimum (BFS)</th><th>Animacja na słupkach</th></tr>" +
       "<tr class='hn-row-user'>" +
-        "<td><b>🧑 Twoje rozwiązanie</b></td>" +
-        "<td><b>" + (solvedByUser ? HN.nMoves(userMoves) : HN.nMoves(userMoves) + " (w trakcie)") + "</b></td>" +
+        "<td><b>🧑 Twoja ścieżka</b></td>" +
+        "<td><b>" + (solvedByUser ? HN.nMoves(userMoves) : HN.nMoves(userMoves) + " (nieukończone)") + "</b></td>" +
         "<td>" + HN.nStates(userUnique) + "</td>" +
-        "<td>" + (!S.bfs.solved ? "cel nieosiągalny" : (solvedByUser ? (userMoves === bfsMoves ? "<b>0 (Optymalne! 🏆)</b>" : "+" + HN.nMoves(userMoves - bfsMoves)) : "—")) + "</td>" +
-        "<td><button class='hn-play-user'>▶ Odtwórz moje</button></td>" +
+        "<td>" + (solvedByUser ? (userMoves === bfsMoves ? "<b>0 (Optymalnie! 🏆)</b>" : "+" + HN.nMoves(userMoves - bfsMoves)) : "—") + "</td>" +
+        "<td><button type='button' class='hn-play-user'" + (S.history.length ? "" : " disabled") + ">▶ Odtwórz moje</button></td>" +
       "</tr>" +
       "<tr class='hn-row-bfs'>" +
-        "<td><b>🌊 BFS (wszerz – Kolejka FIFO)</b><br><small>Gwarantuje najkrótszą ścieżkę</small></td>" +
-        "<td><b>" + (S.bfs.solved ? HN.nMoves(bfsMoves) : "brak") + "</b></td>" +
-        "<td>" + HN.nStates(S.bfs.visitedCount) + " <small>(przeszukano wszerz)</small></td>" +
+        "<td><b>🌊 BFS (wszerz – Kolejka FIFO)</b></td>" +
+        "<td><b>" + HN.nMoves(bfsMoves) + "</b></td>" +
+        "<td>" + HN.nStates(T.bfs.visitedCount) + "</td>" +
         "<td><b>0 (Najkrótsza ścieżka)</b></td>" +
-        "<td>" + (S.bfs.solved ? "<button class='hn-play-bfs'>▶ Pokaż BFS</button>" : "—") + "</td>" +
+        "<td><button type='button' class='hn-play-bfs'>▶ Pokaż BFS</button></td>" +
       "</tr>" +
       "<tr class='hn-row-dfs'>" +
-        "<td><b>🕳️ DFS (w głąb – Stos LIFO)</b><br><small>Idzie w głąb pierwszą wolną gałęzią</small></td>" +
-        "<td><b>" + (S.dfs.solved ? HN.nMoves(dfsMoves) : "brak") + "</b></td>" +
-        "<td>" + HN.nStates(S.dfs.visitedCount) + " <small>(przeszukano w głąb)</small></td>" +
-        "<td>" + (S.dfs.solved ? "+" + HN.nMoves(dfsMoves - bfsMoves) + " (" + (dfsMoves / bfsMoves).toFixed(1) + "× dłużej!)" : "—") + "</td>" +
-        "<td>" + (S.dfs.solved ? "<button class='hn-play-dfs'>▶ Pokaż DFS</button>" : "—") + "</td>" +
+        "<td><b>🕳️ DFS (w głąb – Stos LIFO)</b></td>" +
+        "<td><b>" + HN.nMoves(dfsMoves) + "</b></td>" +
+        "<td>" + HN.nStates(T.dfs.visitedCount) + "</td>" +
+        "<td>+" + HN.nMoves(dfsMoves - bfsMoves) + " (" + (dfsMoves / Math.max(1, bfsMoves)).toFixed(1) + "× dłużej)</td>" +
+        "<td><button type='button' class='hn-play-dfs'>▶ Pokaż DFS</button></td>" +
       "</tr>" +
       "</table>" +
       "<div class='hn-paths-detail'>" +
-        "<div><b>🌊 Najkrótsza ścieżka (BFS – " + (S.bfs.solved ? HN.nMoves(bfsMoves) : "brak") + "):</b><div class='hn-seq'>" + seqHtml(S.bfs.moves, 32) + "</div></div>" +
-        "<div style='margin-top:6px'><b>🕳️ Ścieżka znaleziona przez DFS (" + (S.dfs.solved ? HN.nMoves(dfsMoves) : "brak") + "):</b><div class='hn-seq'>" + seqHtml(S.dfs.moves, 32) + "</div></div>" +
+        "<div><b>🌊 Najkrótsza ścieżka (BFS – " + HN.nMoves(bfsMoves) + "):</b><div class='hn-seq'>" + seqHtml(T.bfs.moves, 32) + "</div></div>" +
+        "<div style='margin-top:6px'><b>🕳️ Ścieżka znaleziona przez DFS (" + HN.nMoves(dfsMoves) + "):</b><div class='hn-seq'>" + seqHtml(T.dfs.moves, 32) + "</div></div>" +
       "</div>";
 
     var btnU = box.querySelector(".hn-play-user");
     if (btnU) btnU.addEventListener("click", function () { playSequence(S.trailStates, S.history, "Twoja ścieżka", "user"); });
     var btnB = box.querySelector(".hn-play-bfs");
-    if (btnB) btnB.addEventListener("click", function () { playSequence(S.bfs.states, S.bfs.moves, "Najkrótsza ścieżka – BFS", "bfs"); });
+    if (btnB) btnB.addEventListener("click", function () { playSequence(T.bfs.states, T.bfs.moves, "Najkrótsza ścieżka – BFS", "bfs"); });
     var btnD = box.querySelector(".hn-play-dfs");
-    if (btnD) btnD.addEventListener("click", function () { playSequence(S.dfs.states, S.dfs.moves, "Ścieżka DFS", "dfs"); });
+    if (btnD) btnD.addEventListener("click", function () { playSequence(T.dfs.states, T.dfs.moves, "Ścieżka DFS", "dfs"); });
+  }
+
+  function checkAll() {
+    var T = S.task;
+    if (exam()) {
+      if (S.locked) return;
+      var missing = [];
+      if (S.ans1Tuple.some(function (p) { return p === null || p < 0; }) || !S.ans1Actions.length) missing.push("Zadanie 1 (START)");
+      if (S.ans2Tuple.some(function (p) { return p === null || p < 0; })) missing.push("Zadanie 2 (Podcel)");
+      if (!HN.stateEq(S.state, T.goal)) missing.push("Zadanie 3 (Wieża nie jest w stanie CEL)");
+      if (missing.length && !S.confirm) {
+        S.confirm = true;
+        S.note = "⚠️ Niekompletne odpowiedzi: " + missing.join(", ") + ". Po zatwierdzeniu w trybie egzaminu nie będzie można ich poprawić – kliknij jeszcze raz, aby zatwierdzić mimo to.";
+        render();
+        return;
+      }
+      S.locked = true;
+      S.confirm = false;
+      S.showCompare = true;
+      S.overlay = "all";
+    }
+    S.res = {
+      t1: HN.checkTask1(T, S.ans1Tuple, S.ans1Actions),
+      t2: HN.checkTask2(T, S.ans2Tuple),
+      t3: HN.checkTask3(T, S.state, S.history)
+    };
+    S.note = "";
+    render();
   }
 
   function render() {
+    var T = S.task;
+    root.querySelectorAll(".hn-mode button").forEach(function (b) {
+      b.className = b.getAttribute("data-mode") === S.mode ? "hn-on" : "";
+    });
+    $(".hn-preset-wrap").style.display = exam() ? "none" : "";
+    $(".hn-rule").innerHTML = RULES[S.mode];
+
+    var showStartTuple = !exam() || S.locked || (S.res.t1 && S.res.t1.ok) || S.reveal;
+    $(".hn-start-lbl").innerHTML = "🟢 Stan początkowy (START)" + (showStartTuple ? ": <code>" + HN.stateLabel(T.start) + "</code>" : "");
+    $(".hn-goal-lbl").innerHTML = "🟡 Stan docelowy (CEL)" + (showStartTuple ? ": <code>" + HN.stateLabel(T.goal) + "</code>" : "");
+
+    drawMiniState($(".hn-start-svg"), T.start, "#2f9e44");
+    drawMiniState($(".hn-goal-svg"), T.goal, "#b08900");
+
     var totalStates = Math.pow(S.k, S.n);
-    var optText = S.bfs.solved ? HN.nMoves(S.bfs.moves.length) : "brak (nieosiągalny)";
+    var curState = S.animState || S.state;
     $(".hn-stats").innerHTML =
-      "Rozmiar przestrzeni stanów: <b>|S| = " + S.k + "<sup>" + S.n + "</sup> = " + totalStates + "</b> &nbsp;·&nbsp; " +
-      "Bieżący stan: <code>" + HN.stateLabel(S.state) + "</code> &nbsp;·&nbsp; " +
-      "Twoje ruchy: <b>" + S.history.length + "</b> &nbsp;·&nbsp; " +
-      "Najkrótsza ścieżka (BFS): <b>" + optText + "</b>";
+      "Przestrzeń stanów: <b>|S| = " + S.k + "<sup>" + S.n + "</sup> = " + totalStates + "</b> &nbsp;·&nbsp; " +
+      (showStartTuple ? "Bieżący stan wieży: <code>" + HN.stateLabel(curState) + "</code> &nbsp;·&nbsp; " : "") +
+      "Twoje ruchy: <b>" + S.history.length + "</b>" +
+      (!exam() || S.locked ? " &nbsp;·&nbsp; Najkrótsza ścieżka (BFS): <b>" + HN.nMoves(T.bfs.moves.length) + "</b>" : "");
 
     var msgBox = $(".hn-msg");
     msgBox.className = "hn-msg hn-msg-" + S.msgKind;
     msgBox.innerHTML = S.msg;
 
-    $(".hn-undo").disabled = S.history.length === 0;
-    $(".hn-toggle-cmp").textContent = S.showCompare ? "🙈 Ukryj porównanie BFS / DFS" : "📊 Porównaj z BFS i DFS (najkrótsza ścieżka)";
+    $(".hn-undo").disabled = S.history.length === 0 || (S.locked && !S.showCompare);
+    $(".hn-reset").disabled = S.locked && !S.showCompare;
 
-    var histHtml = S.history.length
-      ? S.history.map(function (m, idx) {
-          return "<span class='hn-chip' style='border-color:" + HN.COLORS[(m.disk - 1) % HN.COLORS.length] + "'>" +
-            (idx + 1) + ". " + m.label + "</span>";
-        }).join(" ")
-      : "<span style='color:#868e96;font-style:italic'>(jeszcze nie wykonano żadnego ruchu)</span>";
-    $(".hn-history").innerHTML = "<b>Twoje ruchy (" + S.history.length + "):</b> " + histHtml;
-
+    var canSeeBfsDfs = !exam() || S.locked;
     root.querySelectorAll(".hn-ov-btn").forEach(function (b) {
-      b.className = "hn-ov-btn" + (b.getAttribute("data-ov") === S.overlay ? " hn-ov-on" : "");
+      var ov = b.getAttribute("data-ov");
+      b.disabled = !canSeeBfsDfs && ov !== "user";
+      b.className = "hn-ov-btn" + (ov === S.overlay ? " hn-ov-on" : "");
     });
 
     drawTowers();
     drawStateGraph();
+    renderTasks();
     renderComparison();
+
+    $(".hn-note").textContent = S.note;
+
+    var ids = ["t1", "t2", "t3"];
+    var nOk = ids.filter(function (id) { return S.res[id] && S.res[id].ok; }).length;
+    var anyChecked = ids.some(function (id) { return S.res[id]; });
+    var allOk = nOk === 3;
+    var praise = "🎉 <b>Wszystkie 3 zadania rozwiązane bezbłędnie!</b> Zauważ, jak formalna reprezentacja krotki (Lab 2), " +
+      "wyznaczenie podcelu/mostu na trójkącie Sierpińskiego (Newell i Simon) oraz przeszukiwanie BFS (Lab 3) łączą się w jedną całość.";
+
+    $(".hn-summary").innerHTML = exam()
+      ? (S.locked ? "📊 Wynik egzaminu: <b>" + nOk + " / 3</b>. " + (allOk ? praise : "") +
+                    "<br>Chcesz spróbować na nowym układzie? Kliknij <b>🎲 Nowe zadanie</b>." : "")
+      : (allOk ? praise : (anyChecked ? "Popraw zadania oznaczone na czerwono i kliknij <b>✔ Sprawdź</b> ponownie." : ""));
+
+    var cb = $(".hn-check");
+    cb.textContent = !exam() ? "✔ Sprawdź" : S.locked ? "🔒 Zatwierdzone"
+                   : S.confirm ? "🔒 Tak, zatwierdź mimo to" : "🔒 Zatwierdź odpowiedzi";
+    cb.disabled = exam() && S.locked;
+
+    $(".hn-show").style.display = exam() ? "none" : "";
+    $(".hn-toggle-cmp").style.display = exam() ? "none" : "";
+    $(".hn-toggle-cmp").textContent = S.showCompare ? "🙈 Ukryj porównanie BFS / DFS" : "📊 Porównaj z BFS i DFS";
   }
 
   $(".hn-disks").value = String(CFG.n_disks);
-  $(".hn-pegs").value = String(CFG.n_pegs);
-  $(".hn-disks").addEventListener("change", initGame);
-  $(".hn-pegs").addEventListener("change", initGame);
+  $(".hn-disks").addEventListener("change", function () { newTask(S.seed); });
+  $(".hn-preset").addEventListener("change", function () { newTask(S.seed); });
+  $(".hn-seed").addEventListener("change", function () { newTask(parseInt(this.value, 10) || 0); });
+  $(".hn-new").addEventListener("click", function () { newTask(randomSeed()); });
   $(".hn-undo").addEventListener("click", undoMove);
-  $(".hn-reset").addEventListener("click", initGame);
+  $(".hn-reset").addEventListener("click", function () { resetTowersToStart(false); });
+  $(".hn-check").addEventListener("click", checkAll);
+  $(".hn-show").addEventListener("click", function () {
+    S.reveal = !S.reveal;
+    if (S.reveal) S. overlay = "all";
+    this.textContent = S.reveal ? "🙈 Ukryj rozwiązanie" : "👁 Pokaż rozwiązanie";
+    render();
+  });
   $(".hn-toggle-cmp").addEventListener("click", function () {
     S.showCompare = !S.showCompare;
     if (S.showCompare && S.overlay === "user") S.overlay = "all";
     render();
   });
+  root.querySelectorAll(".hn-mode button").forEach(function (b) {
+    b.addEventListener("click", function () { setMode(b.getAttribute("data-mode")); });
+  });
   root.querySelectorAll(".hn-ov-btn").forEach(function (b) {
     b.addEventListener("click", function () {
+      if (b.disabled) return;
       S.overlay = b.getAttribute("data-ov");
       render();
     });
   });
 
-  initGame();
+  newTask(CFG.seed);
 })();
 """
 
 _HANOI_CSS = r"""
 <style>
 .hn-card{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#212529;background:#ffffff;
-  border:1px solid #ced4da;border-radius:10px;padding:14px 16px;max-width:1040px;font-size:14px;line-height:1.45}
+  border:1px solid #ced4da;border-radius:10px;padding:14px 16px;max-width:1120px;font-size:13.5px;line-height:1.45}
 .hn-card *{box-sizing:border-box}
-.hn-card h4{margin:0 0 8px 0;font-size:17px;color:#212529}
+.hn-card h4{margin:0;font-size:17px;color:#212529}
 .hn-card h5{margin:0 0 8px 0;font-size:15px;color:#212529}
-.hn-controls{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:8px}
+.hn-top{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;margin-bottom:8px}
+.hn-mode{display:inline-flex;border:1px solid #adb5bd;border-radius:8px;overflow:hidden}
+.hn-card .hn-mode button{border:none;border-radius:0;background:#f8f9fa;padding:5px 12px;font-size:13.5px}
+.hn-card .hn-mode button + button{border-left:1px solid #adb5bd}
+.hn-card .hn-mode button.hn-on{background:#343a40;color:#fff;font-weight:700}
+.hn-controls{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:6px}
 .hn-controls label{display:flex;gap:6px;align-items:center;font-weight:600;color:#212529}
-.hn-card select,.hn-card button{font-size:13.5px;padding:5px 11px;border:1px solid #adb5bd;border-radius:6px;
+.hn-card select,.hn-card input,.hn-card button{font-size:13.5px;padding:4px 10px;border:1px solid #adb5bd;border-radius:6px;
   background:#f8f9fa;color:#212529;cursor:pointer}
+.hn-card select,.hn-card input{background:#fff}
+.hn-card input.hn-seed{width:90px}
 .hn-card button:hover:not(:disabled){background:#e9ecef}
 .hn-card button:disabled{opacity:0.5;cursor:default}
-.hn-card button.hn-toggle-cmp{background:#1971c2;border-color:#1864ab;color:#fff;font-weight:600}
-.hn-card button.hn-toggle-cmp:hover{background:#1864ab}
-.hn-stats{background:#f1f3f5;border-radius:6px;padding:6px 10px;margin:6px 0;font-size:13px;color:#212529}
-.hn-msg{border-radius:6px;padding:7px 11px;margin:6px 0;font-size:13.5px}
+.hn-rule{background:#f1f3f5;border-radius:6px;padding:7px 11px;margin:6px 0;color:#343a40;font-size:13px}
+.hn-stats{background:#f8f9fa;border:1px solid #e9ecef;border-radius:6px;padding:5px 10px;margin:6px 0;font-size:13px;color:#212529}
+.hn-msg{border-radius:6px;padding:6px 10px;margin:6px 0;font-size:13px}
 .hn-msg-info{background:#e7f5ff;border-left:4px solid #1971c2;color:#212529}
 .hn-msg-ok{background:#d3f9d8;border-left:4px solid #2b8a3e;color:#212529}
 .hn-msg-warn{background:#fff3bf;border-left:4px solid #f08c00;color:#212529}
 .hn-msg-bad{background:#ffe3e3;border-left:4px solid #e03131;color:#212529}
-.hn-body{display:flex;flex-wrap:wrap;gap:12px;align-items:stretch;margin-top:8px}
-.hn-towers-box{flex:1.35 1 380px;min-width:290px;border:1px solid #dee2e6;border-radius:8px;background:#ffffff;padding:6px}
+.hn-body{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin-top:8px}
+.hn-left-col{flex:1.15 1 460px;min-width:310px;display:flex;flex-direction:column;gap:8px}
+.hn-previews{display:flex;gap:8px;flex-wrap:wrap}
+.hn-prev-card{flex:1 1 200px;border:1px solid #dee2e6;border-radius:8px;padding:5px 8px;background:#fff}
+.hn-prev-start{border-top:3px solid #2f9e44;background:#f8fff9}
+.hn-prev-goal{border-top:3px solid #f08c00;background:#fffdf5}
+.hn-prev-title{font-size:12px;font-weight:700;margin-bottom:2px}
+.hn-prev-svg{width:100%;height:auto;display:block}
+.hn-towers-box{border:1px solid #dee2e6;border-radius:8px;background:#ffffff;padding:6px 8px}
+.hn-towers-head{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;font-size:12.5px}
 .hn-towers-svg{width:100%;height:auto;display:block;user-select:none}
 .hn-peg-grp{cursor:pointer}
-.hn-graph-box{flex:1 1 300px;min-width:260px;border:1px solid #dee2e6;border-radius:8px;background:#f8f9fa;padding:8px;
-  display:flex;flex-direction:column;justify-content:space-between}
+.hn-graph-box{border:1px solid #dee2e6;border-radius:8px;background:#f8f9fa;padding:8px}
 .hn-graph-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:4px;font-size:12px}
 .hn-ov-bar{display:inline-flex;border:1px solid #adb5bd;border-radius:6px;overflow:hidden}
 .hn-card .hn-ov-bar button{padding:2px 7px;font-size:11.5px;border:none;border-radius:0;background:#fff}
 .hn-card .hn-ov-bar button + button{border-left:1px solid #adb5bd}
 .hn-card .hn-ov-bar button.hn-ov-on{background:#343a40;color:#fff;font-weight:700}
-.hn-graph-svg{width:100%;height:auto;display:block}
-.hn-legend{display:flex;flex-wrap:wrap;gap:8px;font-size:11.5px;color:#495057;justify-content:center}
-.hn-history{margin-top:8px;font-size:13px;min-height:24px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.hn-graph-svg{width:100%;height:auto;display:block;max-height:240px}
+.hn-legend{display:flex;flex-wrap:wrap;gap:8px;font-size:11.5px;color:#495057;justify-content:center;margin-top:4px}
+.hn-tasks{flex:1 1 430px;min-width:300px;display:flex;flex-direction:column;gap:10px}
+.hn-tcard{border:2px solid #dee2e6;border-left:6px solid var(--c);border-radius:8px;padding:8px 10px;background:#fff}
+.hn-tcard.hn-tok{border-color:#2f9e44;background:#ebfbee}
+.hn-tcard.hn-tbad{border-color:#e03131;background:#fff5f5}
+.hn-thead{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:#212529;margin-bottom:4px}
+.hn-tactions{margin-left:auto;display:flex;gap:4px}
+.hn-card .hn-tactions button{padding:1px 7px;font-size:12.5px}
+.hn-tdesc{font-size:12.5px;color:#343a40;margin-bottom:6px}
+.hn-tuple-box{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:#f8f9fa;padding:6px 8px;border-radius:6px;border:1px solid #e9ecef}
+.hn-paren{font-size:18px;font-weight:700;color:#495057}
+.hn-comma{font-size:16px;font-weight:700;color:#495057}
+.hn-titem{display:flex;align-items:center;gap:4px}
+.hn-tdisk{color:#fff;font-size:11.5px;font-weight:700;padding:2px 6px;border-radius:5px}
+.hn-tbtns{display:inline-flex;border:1px solid #adb5bd;border-radius:5px;overflow:hidden}
+.hn-card .hn-tbtns button{border:none;border-radius:0;padding:2px 8px;font-size:12.5px;background:#fff;font-weight:600}
+.hn-card .hn-tbtns button + button{border-left:1px solid #adb5bd}
+.hn-card .hn-tbtns button.hn-tbtn-on{background:#212529;color:#fff}
+.hn-act-row{display:flex;flex-wrap:wrap;gap:6px}
+.hn-card button.hn-act-btn{padding:3px 10px;font-size:12.5px;font-weight:600;border-radius:14px;background:#fff}
+.hn-card button.hn-act-btn.hn-act-on{background:#1971c2;border-color:#1864ab;color:#fff}
+.hn-seq-box{background:#f8f9fa;border:1px solid #e9ecef;border-radius:6px;padding:6px 8px;min-height:32px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.hn-ph{color:#868e96;font-style:italic;font-size:12.5px}
+.hn-badge{font-size:11.5px;font-weight:700;padding:1px 8px;border-radius:10px}
+.hn-badge-ok{background:#fff3bf;color:#b08900;border:1px solid #fcc419}
+.hn-badge-prog{background:#e9ecef;color:#495057}
+.hn-tres{margin-top:6px;display:flex;align-items:center;gap:8px;color:#212529;font-size:13px}
+.hn-face{font-size:24px;line-height:1;flex:none}
+.hn-sol{margin-top:5px;padding-top:4px;border-top:1px dashed #ced4da;color:#495057;font-size:12.5px}
+.hn-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+.hn-card button.hn-check{background:#2f9e44;border-color:#2b8a3e;color:#fff;font-weight:700;padding:6px 14px}
+.hn-card button.hn-check:hover:not(:disabled){background:#2b8a3e}
+.hn-card button.hn-toggle-cmp{background:#1971c2;border-color:#1864ab;color:#fff;font-weight:600}
+.hn-card button.hn-toggle-cmp:hover:not(:disabled){background:#1864ab}
+.hn-note{color:#e8590c;min-height:18px;font-size:13px;margin-top:6px}
+.hn-summary{margin-top:6px;color:#212529;min-height:20px;font-size:13.5px}
 .hn-chip{display:inline-block;padding:1px 7px;border-radius:10px;border:2px solid #adb5bd;background:#fff;font-size:12px;font-weight:600}
 .hn-compare{margin-top:12px;padding:12px;border:2px solid #1971c2;border-radius:8px;background:#f8f9fa}
-.hn-verdict{padding:8px 10px;border-radius:6px;margin-bottom:8px;font-size:13.5px}
+.hn-verdict{padding:8px 10px;border-radius:6px;margin-bottom:8px;font-size:13px}
 .hn-v-ok{background:#d3f9d8;border-left:4px solid #2b8a3e}
 .hn-v-info{background:#e7f5ff;border-left:4px solid #1971c2}
-.hn-v-warn{background:#fff3bf;border-left:4px solid #f08c00}
-.hn-tbl{width:100%;border-collapse:collapse;font-size:13px;background:#fff;margin-bottom:8px}
-.hn-tbl th,.hn-tbl td{border:1px solid #ced4da;padding:6px 8px;text-align:left;color:#212529}
+.hn-tbl{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;margin-bottom:8px}
+.hn-tbl th,.hn-tbl td{border:1px solid #ced4da;padding:5px 8px;text-align:left;color:#212529}
 .hn-tbl th{background:#e9ecef;font-weight:700}
 .hn-row-user td{background:#fff9db}
 .hn-row-bfs td{background:#e7f5ff}
 .hn-row-dfs td{background:#f3d9fa}
-.hn-paths-detail{font-size:12.5px;color:#212529;background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:8px}
-.hn-seq{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;line-height:1.6}
+.hn-paths-detail{font-size:12px;color:#212529;background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:8px}
+.hn-seq{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;line-height:1.5}
 </style>
 """
 
 _HANOI_HTML = r"""
 <div class="hn-card" id="__ROOT__">
-  <h4>🗼 Wyzwanie: Rozwiąż Wieże Hanoi i porównaj swój wynik z BFS oraz DFS</h4>
+  <div class="hn-top">
+    <h4>🗼 Ćwiczenie: Wieże Hanoi – przestrzeń stanów, podcele i najkrótsza ścieżka</h4>
+    <div class="hn-mode">
+      <button type="button" data-mode="exam">📝 Egzamin</button><button type="button" data-mode="playground">🔓 Plac zabaw</button>
+    </div>
+  </div>
   <div class="hn-controls">
     <label>Krążków (n): <select class="hn-disks">
       <option value="2">2 krążki</option>
       <option value="3">3 krążki</option>
       <option value="4">4 krążki</option>
-      <option value="5">5 krążków</option>
-      <option value="6">6 krążków</option>
     </select></label>
-    <label>Słupków (k): <select class="hn-pegs">
-      <option value="2">2 słupki (A–B)</option>
-      <option value="3">3 słupki (A–C)</option>
-      <option value="4">4 słupki (A–D)</option>
-      <option value="5">5 słupków (A–E)</option>
+    <label class="hn-preset-wrap">Układ: <select class="hn-preset">
+      <option value="random">🎲 Losowy (START → CEL)</option>
+      <option value="classic">🗼 Klasyczny (A → C)</option>
     </select></label>
-    <button class="hn-undo">↶ Cofnij ruch</button>
-    <button class="hn-reset">⟲ Od początku</button>
-    <button class="hn-toggle-cmp">📊 Porównaj z BFS i DFS (najkrótsza ścieżka)</button>
+    <label>Numer zadania: <input class="hn-seed" type="number" min="0" step="1"></label>
+    <button type="button" class="hn-new">🎲 Nowe zadanie</button>
   </div>
+  <div class="hn-rule"></div>
   <div class="hn-stats"></div>
-  <div class="hn-msg"></div>
   <div class="hn-body">
-    <div class="hn-towers-box">
-      <svg class="hn-towers-svg" viewBox="0 0 540 290" xmlns="http://www.w3.org/2000/svg"></svg>
-    </div>
-    <div class="hn-graph-box">
-      <div class="hn-graph-head">
-        <b>Mapa przestrzeni stanów (graf):</b>
-        <div class="hn-ov-bar">
-          <button class="hn-ov-btn" data-ov="user">Twoja</button>
-          <button class="hn-ov-btn" data-ov="bfs">BFS</button>
-          <button class="hn-ov-btn" data-ov="dfs">DFS</button>
-          <button class="hn-ov-btn" data-ov="all">Wszystkie</button>
+    <div class="hn-left-col">
+      <div class="hn-previews">
+        <div class="hn-prev-card hn-prev-start">
+          <div class="hn-prev-title hn-start-lbl">🟢 Stan początkowy (START)</div>
+          <svg class="hn-prev-svg hn-start-svg" viewBox="0 0 230 112" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+        <div class="hn-prev-card hn-prev-goal">
+          <div class="hn-prev-title hn-goal-lbl">🟡 Stan docelowy (CEL)</div>
+          <svg class="hn-prev-svg hn-goal-svg" viewBox="0 0 230 112" xmlns="http://www.w3.org/2000/svg"></svg>
         </div>
       </div>
-      <svg class="hn-graph-svg" viewBox="0 0 380 310" xmlns="http://www.w3.org/2000/svg"></svg>
-      <div class="hn-legend">
-        <span>🟢 Start</span>
-        <span>🟡 Cel</span>
-        <span>🔴 Bieżący</span>
-        <span style="color:#f08c00;font-weight:700">▬ Twoja ścieżka</span>
-        <span style="color:#1971c2;font-weight:700">▬ Najkrótsza (BFS)</span>
-        <span style="color:#9c36b5;font-weight:700">▬ Ścieżka DFS</span>
+      <div class="hn-towers-box">
+        <div class="hn-towers-head">
+          <b>Interaktywne słupki (przekładaj krążki do Zadania 3):</b>
+          <div>
+            <button type="button" class="hn-undo">↶ Cofnij ruch</button>
+            <button type="button" class="hn-reset">⟲ Wróć do START</button>
+          </div>
+        </div>
+        <div class="hn-msg"></div>
+        <svg class="hn-towers-svg" viewBox="0 0 520 240" xmlns="http://www.w3.org/2000/svg"></svg>
+      </div>
+      <div class="hn-graph-box">
+        <div class="hn-graph-head">
+          <b>Mapa przestrzeni stanów (trójkąt Sierpińskiego):</b>
+          <div class="hn-ov-bar">
+            <button type="button" class="hn-ov-btn" data-ov="user">Twoja</button>
+            <button type="button" class="hn-ov-btn" data-ov="bfs">BFS</button>
+            <button type="button" class="hn-ov-btn" data-ov="dfs">DFS</button>
+            <button type="button" class="hn-ov-btn" data-ov="all">Wszystkie</button>
+          </div>
+        </div>
+        <svg class="hn-graph-svg" viewBox="0 0 380 300" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div class="hn-legend">
+          <span>🟢 Start</span>
+          <span>🟡 Cel</span>
+          <span>🔴 Bieżący</span>
+          <span>🎯 Podcel (Zad. 2)</span>
+          <span style="color:#f08c00;font-weight:700">▬ Twoja</span>
+          <span style="color:#1971c2;font-weight:700">▬ BFS</span>
+          <span style="color:#9c36b5;font-weight:700">▬ DFS</span>
+        </div>
       </div>
     </div>
+    <div class="hn-tasks"></div>
   </div>
-  <div class="hn-history"></div>
+  <div class="hn-note"></div>
+  <div class="hn-actions">
+    <button type="button" class="hn-check">🔒 Zatwierdź odpowiedzi</button>
+    <button type="button" class="hn-show">👁 Pokaż rozwiązanie</button>
+    <button type="button" class="hn-toggle-cmp">📊 Porównaj z BFS i DFS</button>
+  </div>
+  <div class="hn-summary"></div>
   <div class="hn-compare" style="display:none"></div>
 </div>
 """
 
 
-def build_hanoi_html(n_disks: int = 3, n_pegs: int = 3) -> str:
-    """Buduje samodzielny widget HTML/SVG/JS do rozwiazywania Wiez Hanoi i porownania z BFS/DFS."""
-    if not 2 <= n_disks <= 6:
-        raise ValueError("n_disks musi byc w przedziale 2..6")
+def build_hanoi_html(
+    n_disks: int = 3,
+    n_pegs: int = 3,
+    seed: int | None = None,
+    mode: str = "exam",
+) -> str:
+    """Buduje samodzielny 3-czesciowy widget HTML/SVG/JS z cwiczeniem Wiez Hanoi."""
+    import random
+
+    if not 2 <= n_disks <= 4:
+        raise ValueError("n_disks w cwiczeniu musi byc w przedziale 2..4")
     if not 2 <= n_pegs <= 5:
         raise ValueError("n_pegs musi byc w przedziale 2..5")
+    if mode not in HANOI_MODES:
+        raise ValueError(f"mode musi byc jednym z {HANOI_MODES}")
+    if seed is None:
+        seed = random.randrange(100000)
     root = "hn-" + uuid.uuid4().hex[:10]
-    cfg = json.dumps({"n_disks": int(n_disks), "n_pegs": int(n_pegs)})
+    cfg = json.dumps({"n_disks": int(n_disks), "n_pegs": int(n_pegs), "seed": int(seed), "mode": mode})
     ui = _HANOI_UI_JS.replace("__ROOT__", root).replace("__CFG__", cfg)
     return (
         _HANOI_CSS
@@ -1326,8 +2106,13 @@ def build_hanoi_html(n_disks: int = 3, n_pegs: int = 3) -> str:
     )
 
 
-def hanoi_exercise(n_disks: int = 3, n_pegs: int = 3):
-    """Wyswietla interaktywna gre Wieze Hanoi z wyborem liczby krazkow (min. 2) i slupkow (min. 2)
-    oraz porownaniem ruchow gracza z BFS (najkrotsza sciezka) i DFS."""
+def hanoi_exercise(
+    n_disks: int = 3,
+    n_pegs: int = 3,
+    seed: int | None = None,
+    mode: str = "exam",
+):
+    """Wyswietla 3-czesciowe interaktywne cwiczenie Wieze Hanoi (tryb 'exam' lub 'playground').
+    Podaj seed (np. 2026), zeby cala grupa dostala to samo zadanie START -> CEL."""
     from IPython.display import HTML, display
-    display(HTML(build_hanoi_html(n_disks=n_disks, n_pegs=n_pegs)))
+    display(HTML(build_hanoi_html(n_disks=n_disks, n_pegs=n_pegs, seed=seed, mode=mode)))
